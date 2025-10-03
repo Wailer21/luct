@@ -3,7 +3,7 @@ import axios from "axios";
 // Base API URL (from frontend .env)
 const API_BASE_URL = process.env.REACT_APP_API_URL
   ? `${process.env.REACT_APP_API_URL}/api`
-  : "http://localhost:5000/api";
+  : "https://luct-tcm7.onrender.com/api";
 
 export const API_ENDPOINTS = {
   // Auth
