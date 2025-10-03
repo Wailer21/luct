@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { useAuth } from "../utils/auth"
-import { api, API_ENDPOINTS } from "../utils/api";
+import { apiMethods } from "../utils/api"   // ✅ fixed import
 
 export default function Home() {
   const { user, isAuthenticated, loading } = useAuth()
@@ -20,19 +20,18 @@ export default function Home() {
     try {
       setLoadingStats(true)
       
-      // Fetch system stats based on user role
       if (isAuthenticated) {
         const [statsRes, activityRes, healthRes] = await Promise.all([
-          apiMethods.getReportStats(),
-          apiMethods.getReports({ limit: 5 }),
-          apiMethods.healthCheck()
+          apiMethods.reports.getReportStats(),        // ✅ fixed
+          apiMethods.reports.getReports({ limit: 5 }),// ✅ fixed
+          apiMethods.system.healthCheck()             // ✅ fixed
         ])
 
         if (statsRes.success) setStats(statsRes.data)
         if (activityRes.success) setRecentActivity(activityRes.data?.reports || [])
         if (healthRes.success) setSystemStatus(healthRes.data)
       } else {
-        const healthRes = await apiMethods.healthCheck()
+        const healthRes = await apiMethods.system.healthCheck() // ✅ fixed
         if (healthRes.success) setSystemStatus(healthRes.data)
       }
     } catch (error) {
