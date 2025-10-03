@@ -4,8 +4,8 @@
   "main": "app.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node app.js",
-    "postinstall": "npm rebuild bcrypt --build-from-source"
+    "start": "node app.js"
+   
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
