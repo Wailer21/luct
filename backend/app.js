@@ -3,7 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const morgan = require("morgan");
 const helmet = require("helmet");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { Pool } = require("pg");
 const rateLimit = require("express-rate-limit");
@@ -302,19 +302,28 @@ app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return sendError(res, "Email and password are required", 400);
 
+    console.log('🔐 Login attempt for:', email);
+
+    // REMOVED is_active check
     const users = await executeQuery(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.password_hash, r.name AS role
        FROM users u 
        JOIN roles r ON u.role_id = r.id 
-       WHERE u.email = $1 AND u.is_active = true`,
+       WHERE u.email = $1`,
       [email]
     );
     
-    if (!users.rows.length) return sendError(res, "Invalid credentials", 400);
+    if (!users.rows.length) {
+      console.log('❌ Login failed: User not found');
+      return sendError(res, "Invalid credentials", 400);
+    }
 
     const user = users.rows[0];
     const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) return sendError(res, "Invalid credentials", 400);
+    if (!match) {
+      console.log('❌ Login failed: Invalid password');
+      return sendError(res, "Invalid credentials", 400);
+    }
 
     const token = jwt.sign(
       { 
@@ -328,7 +337,7 @@ app.post("/api/auth/login", async (req, res) => {
       { expiresIn: "24h" }
     );
 
-    console.log('✅ User logged in:', user.email);
+    console.log('✅ User logged in successfully:', user.email);
     sendSuccess(res, { 
       token, 
       user: {
@@ -348,11 +357,12 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/auth/me", authenticateToken, async (req, res) => {
   try {
+    // REMOVED is_active check
     const users = await executeQuery(
       `SELECT u.id, u.email, u.first_name, u.last_name, r.name AS role
        FROM users u 
        JOIN roles r ON u.role_id = r.id 
-       WHERE u.id = $1 AND u.is_active = true`,
+       WHERE u.id = $1`,
       [req.user.id]
     );
     
@@ -384,7 +394,6 @@ app.get("/api/courses", authenticateToken, async (req, res) => {
       `SELECT c.id, c.code, c.name as course_name, c.total_registered, f.name as faculty_name
        FROM courses c 
        JOIN faculties f ON c.faculty_id = f.id 
-       WHERE c.is_active = true
        ORDER BY c.name`
     );
     sendSuccess(res, rows.rows, "Courses fetched successfully");
@@ -404,7 +413,6 @@ app.get("/api/classes", authenticateToken, async (req, res) => {
        JOIN courses c ON cl.course_id = c.id
        JOIN faculties f ON c.faculty_id = f.id
        LEFT JOIN users u ON cl.lecturer_id = u.id
-       WHERE cl.is_active = true
        ORDER BY cl.class_name`
     );
     sendSuccess(res, rows.rows, "Classes fetched successfully");
@@ -426,7 +434,7 @@ app.get("/api/my-classes", authenticateToken, async (req, res) => {
        FROM classes cl
        JOIN courses c ON cl.course_id = c.id
        JOIN faculties f ON c.faculty_id = f.id
-       WHERE cl.lecturer_id = $1 AND cl.is_active = true
+       WHERE cl.lecturer_id = $1
        ORDER BY cl.class_name`,
       [req.user.id]
     );
@@ -451,7 +459,7 @@ app.get("/api/lecturers", authenticateToken, async (req, res) => {
        FROM users u
        JOIN roles r ON u.role_id = r.id
        LEFT JOIN ratings rat ON u.id = rat.lecturer_id
-       WHERE r.name = 'Lecturer' AND u.is_active = true
+       WHERE r.name = 'Lecturer'
        GROUP BY u.id, u.first_name, u.last_name, u.email
        ORDER BY u.first_name, u.last_name`
     );
@@ -769,7 +777,7 @@ app.get("/api/search", authenticateToken, async (req, res) => {
               c.total_registered, f.name as faculty_name
        FROM courses c
        JOIN faculties f ON c.faculty_id = f.id
-       WHERE (c.name ILIKE $1 OR c.code ILIKE $1) AND c.is_active = true
+       WHERE (c.name ILIKE $1 OR c.code ILIKE $1)
        ORDER BY c.name
        LIMIT 10`,
       [searchTerm]
