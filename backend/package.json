@@ -2,24 +2,20 @@
   "name": "luct-backend",
   "version": "1.0.0",
   "main": "app.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "postinstall": "npm rebuild bcrypt --build-from-source"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
-    "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
-    "dotenv": "^16.6.1",
-    "express": "^4.21.2",
-    "express-rate-limit": "^8.1.0",
-    "helmet": "^8.1.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.10.1",
-    "mysql2": "^3.15.1",
-    "pg": "^8.16.3"
+    "mysql2": "^3.11.3"
   },
-  "devDependencies": {
-    "nodemon": "^2.0.22"
+  "engines": {
+    "node": "22.x"
   }
 }
