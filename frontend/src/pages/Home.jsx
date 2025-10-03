@@ -128,43 +128,7 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Stats Overview */}
-          {stats && !loading && (
-            <div className="row mb-5">
-              <div className="col-12 mb-4">
-                <h4 className="text-primary mb-3 fw-bold">📊 Quick Overview</h4>
-              </div>
-              
-              <StatCard
-                icon="fas fa-clipboard-list"
-                value={stats.total_reports || 0}
-                label="Total Reports"
-                color="primary"
-              />
-              
-              <StatCard
-                icon="fas fa-users"
-                value={`${Math.round(stats.avg_attendance) || 0}%`}
-                label="Avg Attendance"
-                color="success"
-              />
-              
-              <StatCard
-                icon="fas fa-chalkboard-teacher"
-                value={stats.active_lecturers || 0}
-                label="Active Lecturers"
-                color="info"
-              />
-              
-              <StatCard
-                icon="fas fa-book"
-                value={stats.courses_covered || 0}
-                label="Courses Covered"
-                color="warning"
-              />
-            </div>
-          )}
-
+      
           {/* Quick Actions */}
           <div className="row mb-5">
             <div className="col-12 mb-4">
