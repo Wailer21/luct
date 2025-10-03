@@ -10,7 +10,11 @@ const rateLimit = require("express-rate-limit");
 
 dotenv.config();
 const app = express();
-
+// ✅ Allowed origins
+const allowedOrigins = [
+  "http://localhost:3000",                         // local dev
+  "https://frontend-8tlqmgw6n-thomonyaneneo-gmailcoms-projects.vercel.app" // Vercel
+];
 // PostgreSQL connection configuration
 const dbConfig = {
   connectionString: process.env.DATABASE_URL || "postgresql://luct_reports_user:VfNK4tNbsVQ58Bvh4glC1dVQ4cPDjbm5@dpg-d36jogadbo4c73dse7l0-a.virginia-postgres.render.com/luct_reports",
