@@ -1,33 +1,40 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../utils/auth';
-import { api, API_ENDPOINTS } from '../utils/api';
+import { apiMethods } from '../utils/api';
+import { exportCoursesToExcel } from '../utils/excelExport';
 
 export default function Courses() {
-  const { user } = useAuth();
   const [courses, setCourses] = useState([]);
+  const [faculties, setFaculties] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({
-    code: '',
+  const [formData, setFormData] = useState({
     name: '',
+    code: '',
     faculty_id: '',
     total_registered: ''
   });
+  const [formLoading, setFormLoading] = useState(false);
+
+  const { user } = useAuth();
 
   useEffect(() => {
-    fetchCourses();
+    fetchData();
   }, []);
 
-  const fetchCourses = async () => {
+  const fetchData = async () => {
     try {
-      setLoading(true);
-      const response = await api.get(API_ENDPOINTS.COURSES, true);
-      if (response.success) {
-        setCourses(response.data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch courses:', error);
+      const [coursesRes, facultiesRes] = await Promise.all([
+        apiMethods.getCourses(),
+        apiMethods.getFaculties()
+      ]);
+
+      if (coursesRes.success) setCourses(coursesRes.data);
+      if (facultiesRes.success) setFaculties(facultiesRes.data);
+    } catch (err) {
+      setError('Failed to fetch data');
+      console.error('Data fetch error:', err);
     } finally {
       setLoading(false);
     }
@@ -35,184 +42,243 @@ export default function Courses() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setFormLoading(true);
+
     try {
-      const response = await api.post(API_ENDPOINTS.COURSES, form, true);
+      const response = await apiMethods.post(apiMethods.API_ENDPOINTS.COURSES, formData);
+      
       if (response.success) {
+        setCourses([...courses, response.data]);
         setShowForm(false);
-        setForm({ code: '', name: '', faculty_id: '', total_registered: '' });
-        fetchCourses();
+        setFormData({
+          name: '',
+          code: '',
+          faculty_id: '',
+          total_registered: ''
+        });
+      } else {
+        setError(response.message || 'Failed to create course');
       }
-    } catch (error) {
-      console.error('Failed to create course:', error);
+    } catch (err) {
+      setError('An error occurred while creating the course');
+      console.error('Course creation error:', err);
+    } finally {
+      setFormLoading(false);
     }
   };
 
-  const filteredCourses = courses.filter(course =>
-    course.course_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    course.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    course.faculty_name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handleChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value
+    });
+  };
 
-  if (loading) {
+  const handleExport = () => {
+    const success = exportCoursesToExcel(courses);
+    if (success) {
+      console.log('Courses exported successfully');
+    }
+  };
+
+  if (!['PL', 'PRL', 'Admin'].includes(user?.role)) {
     return (
-      <div className="container-fluid">
-        <div className="d-flex justify-content-center align-items-center py-5">
-          <div className="spinner-border text-primary" role="status">
-            <span className="visually-hidden">Loading courses...</span>
-          </div>
+      <div className="container-fluid py-4">
+        <div className="alert alert-danger">
+          <i className="fas fa-exclamation-triangle me-2"></i>
+          Access denied. Course management requires PL, PRL, or Admin role.
         </div>
       </div>
     );
   }
 
   return (
-    <div className="container-fluid">
-      <div className="row mb-4">
+    <div className="container-fluid py-4">
+      <div className="row">
         <div className="col-12">
-          <div className="d-flex justify-content-between align-items-center flex-wrap">
+          <div className="d-flex justify-content-between align-items-center mb-4">
             <div>
-              <h4 className="text-primary mb-1 fw-bold">📚 Course Management</h4>
-              <p className="text-muted mb-0">
-                {user?.role === 'PL' ? 'Manage all courses and assign lecturers' : 'View courses under your stream'}
-              </p>
+              <h2 className="text-primary mb-1">
+                <i className="fas fa-book me-2"></i>
+                Course Management
+              </h2>
+              <p className="text-muted mb-0">Manage academic courses and programs</p>
             </div>
-            
-            <div className="d-flex gap-2 flex-wrap">
-              {/* Search Bar */}
-              <div className="input-group" style={{ width: '300px' }}>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="Search courses..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-                <button className="btn btn-outline-primary" type="button">
-                  <i className="fas fa-search"></i>
-                </button>
-              </div>
-
-              {/* Add Course Button for PL */}
-              {user?.role === 'PL' && (
-                <button
-                  className="btn btn-primary"
-                  onClick={() => setShowForm(true)}
-                >
-                  <i className="fas fa-plus me-2"></i>
-                  Add Course
-                </button>
-              )}
+            <div className="d-flex gap-2">
+              <button
+                className="btn btn-success"
+                onClick={handleExport}
+                disabled={courses.length === 0}
+              >
+                <i className="fas fa-file-excel me-2"></i>
+                Export Courses
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowForm(!showForm)}
+              >
+                <i className="fas fa-plus me-2"></i>
+                Add Course
+              </button>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Add Course Modal */}
-      {showForm && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="modal-dialog">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title">Add New Course</h5>
-                <button type="button" className="btn-close" onClick={() => setShowForm(false)}></button>
+          {error && (
+            <div className="alert alert-danger" role="alert">
+              <i className="fas fa-exclamation-circle me-2"></i>
+              {error}
+            </div>
+          )}
+
+          {showForm && (
+            <div className="card shadow mb-4">
+              <div className="card-header bg-primary text-white">
+                <h5 className="mb-0">
+                  <i className="fas fa-plus-circle me-2"></i>
+                  Add New Course
+                </h5>
               </div>
-              <div className="modal-body">
+              <div className="card-body">
                 <form onSubmit={handleSubmit}>
-                  <div className="mb-3">
-                    <label className="form-label">Course Code</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={form.code}
-                      onChange={(e) => setForm({ ...form, code: e.target.value })}
-                      required
-                    />
+                  <div className="row">
+                    <div className="col-md-6 mb-3">
+                      <label htmlFor="name" className="form-label">Course Name</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        id="name"
+                        name="name"
+                        value={formData.name}
+                        onChange={handleChange}
+                        required
+                        disabled={formLoading}
+                      />
+                    </div>
+                    <div className="col-md-6 mb-3">
+                      <label htmlFor="code" className="form-label">Course Code</label>
+                      <input
+                        type="text"
+                        className="form-control"
+                        id="code"
+                        name="code"
+                        value={formData.code}
+                        onChange={handleChange}
+                        required
+                        disabled={formLoading}
+                      />
+                    </div>
                   </div>
-                  <div className="mb-3">
-                    <label className="form-label">Course Name</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={form.name}
-                      onChange={(e) => setForm({ ...form, name: e.target.value })}
-                      required
-                    />
+                  <div className="row">
+                    <div className="col-md-6 mb-3">
+                      <label htmlFor="faculty_id" className="form-label">Faculty</label>
+                      <select
+                        className="form-select"
+                        id="faculty_id"
+                        name="faculty_id"
+                        value={formData.faculty_id}
+                        onChange={handleChange}
+                        required
+                        disabled={formLoading}
+                      >
+                        <option value="">Select Faculty</option>
+                        {faculties.map(faculty => (
+                          <option key={faculty.id} value={faculty.id}>
+                            {faculty.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="col-md-6 mb-3">
+                      <label htmlFor="total_registered" className="form-label">Total Registered</label>
+                      <input
+                        type="number"
+                        className="form-control"
+                        id="total_registered"
+                        name="total_registered"
+                        value={formData.total_registered}
+                        onChange={handleChange}
+                        min="0"
+                        required
+                        disabled={formLoading}
+                      />
+                    </div>
                   </div>
-                  <div className="mb-3">
-                    <label className="form-label">Total Registered</label>
-                    <input
-                      type="number"
-                      className="form-control"
-                      value={form.total_registered}
-                      onChange={(e) => setForm({ ...form, total_registered: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="d-flex gap-2 justify-content-end">
-                    <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>
+                  <div className="d-flex gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setShowForm(false)}
+                      disabled={formLoading}
+                    >
                       Cancel
                     </button>
-                    <button type="submit" className="btn btn-primary">
-                      Add Course
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={formLoading}
+                    >
+                      {formLoading ? 'Creating...' : 'Create Course'}
                     </button>
                   </div>
                 </form>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Courses Table */}
-      <div className="card shadow border-0">
-        <div className="card-body">
-          <div className="table-responsive">
-            <table className="table table-hover">
-              <thead className="table-light">
-                <tr>
-                  <th>Course Code</th>
-                  <th>Course Name</th>
-                  <th>Faculty</th>
-                  <th>Total Registered</th>
-                  {user?.role === 'PL' && <th>Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCourses.map(course => (
-                  <tr key={course.id}>
-                    <td>
-                      <strong className="text-primary">{course.code}</strong>
-                    </td>
-                    <td>
-                      <strong>{course.course_name}</strong>
-                    </td>
-                    <td>{course.faculty_name}</td>
-                    <td>
-                      <span className="badge bg-info">{course.total_registered}</span>
-                    </td>
-                    {user?.role === 'PL' && (
-                      <td>
-                        <button className="btn btn-sm btn-outline-primary me-2">
-                          <i className="fas fa-edit"></i>
-                        </button>
-                        <button className="btn btn-sm btn-outline-danger">
-                          <i className="fas fa-trash"></i>
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {filteredCourses.length === 0 && (
-            <div className="text-center py-5">
-              <i className="fas fa-book fa-4x text-muted mb-3"></i>
-              <h5 className="text-muted">No courses found</h5>
-              <p className="text-muted">Try adjusting your search terms</p>
-            </div>
           )}
+
+          <div className="card shadow">
+            <div className="card-body">
+              {loading ? (
+                <div className="text-center py-5">
+                  <div className="spinner-border text-primary"></div>
+                  <p className="mt-2">Loading courses...</p>
+                </div>
+              ) : courses.length === 0 ? (
+                <div className="text-center py-5">
+                  <i className="fas fa-book fa-3x text-muted mb-3"></i>
+                  <h5 className="text-muted">No courses found</h5>
+                  <p className="text-muted">Get started by adding your first course</p>
+                </div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table table-hover">
+                    <thead>
+                      <tr>
+                        <th>Code</th>
+                        <th>Course Name</th>
+                        <th>Faculty</th>
+                        <th>Registered Students</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {courses.map((course) => (
+                        <tr key={course.id}>
+                          <td>
+                            <strong>{course.code}</strong>
+                          </td>
+                          <td>{course.course_name}</td>
+                          <td>{course.faculty_name}</td>
+                          <td>
+                            <span className="badge bg-primary">
+                              {course.total_registered} students
+                            </span>
+                          </td>
+                          <td>
+                            <button className="btn btn-sm btn-outline-primary me-1">
+                              <i className="fas fa-edit"></i>
+                            </button>
+                            <button className="btn btn-sm btn-outline-danger">
+                              <i className="fas fa-trash"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>

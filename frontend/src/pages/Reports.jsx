@@ -1,50 +1,48 @@
-// Reports.jsx - Enhanced with Role-Based Content
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../utils/auth';
-import { api, API_ENDPOINTS } from '../utils/api';
+import { apiMethods } from '../utils/api';
+import { exportReportsToExcel } from '../utils/excelExport';
 
 export default function Reports({ view = 'all' }) {
-  const { user } = useAuth();
   const [reports, setReports] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState({
+    course: '',
+    lecturer: '',
+    week: ''
+  });
+
+  const { user } = useAuth();
 
   useEffect(() => {
     fetchReports();
     if (view === 'all') {
       fetchStats();
     }
-  }, [filter, view]);
+  }, [view]);
 
   const fetchReports = async () => {
     try {
       setLoading(true);
-      let endpoint = API_ENDPOINTS.REPORTS;
-      
-      const response = await api.get(endpoint, true);
-      
+      const response = await apiMethods.getReports();
       if (response.success) {
-        let filteredReports = response.data || [];
+        let filteredReports = response.data.reports || response.data;
         
-        // Apply role-based filtering
-        if (user?.role === 'Lecturer') {
-          if (filter === 'my' || view === 'my-classes') {
-            filteredReports = filteredReports.filter(report => report.lecturer_id === user.id);
-          }
-        } else if (user?.role === 'Student') {
-          // Students see only reports relevant to their courses
+        if (view === 'my-classes' && user?.role === 'Lecturer') {
           filteredReports = filteredReports.filter(report => 
-            report.course_id === user.course_id // Assuming student has course_id
+            report.lecturer_id === user.id
           );
         }
         
         setReports(filteredReports);
+      } else {
+        setError(response.message || 'Failed to fetch reports');
       }
     } catch (err) {
-      setError(err.message || 'Failed to load reports');
-      console.error('Fetch reports error:', err);
+      setError('An error occurred while fetching reports');
+      console.error('Reports fetch error:', err);
     } finally {
       setLoading(false);
     }
@@ -52,89 +50,50 @@ export default function Reports({ view = 'all' }) {
 
   const fetchStats = async () => {
     try {
-      const response = await api.get(API_ENDPOINTS.REPORTS_STATS, true);
+      const response = await apiMethods.getReportStats();
       if (response.success) {
         setStats(response.data);
       }
     } catch (err) {
-      console.error('Fetch stats error:', err);
+      console.error('Stats fetch error:', err);
     }
   };
 
-  const getAttendancePercentage = (actual, total) => {
-    if (!actual || !total) return 0;
-    return Math.round((actual / total) * 100);
+  const handleFilterChange = (e) => {
+    setFilter({
+      ...filter,
+      [e.target.name]: e.target.value
+    });
   };
 
-  const getAttendanceColor = (percentage) => {
-    if (percentage >= 80) return 'success';
-    if (percentage >= 60) return 'warning';
-    return 'danger';
+  const filteredReports = reports.filter(report => {
+    return (
+      (filter.course === '' || report.course_name?.toLowerCase().includes(filter.course.toLowerCase())) &&
+      (filter.lecturer === '' || report.lecturer_name?.toLowerCase().includes(filter.lecturer.toLowerCase())) &&
+      (filter.week === '' || report.week_of_reporting?.toString() === filter.week)
+    );
+  });
+
+  const getAttendanceRate = (present, total) => {
+    if (!total || total === 0) return 0;
+    return Math.round((present / total) * 100);
   };
 
-  const getAttendanceVariant = (percentage) => {
-    if (percentage >= 80) return 'bg-success';
-    if (percentage >= 60) return 'bg-warning';
-    return 'bg-danger';
+  const handleExport = () => {
+    const success = exportReportsToExcel(filteredReports);
+    if (success) {
+      // You can add a toast notification here
+      console.log('Export successful');
+    }
   };
-
-  const handleFilterChange = (newFilter) => {
-    setFilter(newFilter);
-  };
-
-  // Role-based configuration
-  const getRoleConfig = () => {
-    const config = {
-      Student: {
-        title: '📈 Course Monitoring',
-        description: 'Track your course progress and attendance',
-        showFilters: false,
-        showStats: false,
-        columns: ['Report ID', 'Course', 'Lecture Date', 'Attendance', 'Week', 'Status']
-      },
-      Lecturer: {
-        title: view === 'my-classes' ? '👨‍🏫 My Classes' : '📊 Lecture Reports',
-        description: view === 'my-classes' ? 'Manage your assigned classes and reports' : 'Track and manage your lecture reports',
-        showFilters: view !== 'my-classes',
-        showStats: view !== 'my-classes',
-        columns: ['Report ID', 'Course', 'Class', 'Lecture Date', 'Attendance', 'Week', 'Status']
-      },
-      PRL: {
-        title: '📋 Faculty Reports',
-        description: 'Overview of all reports in your faculty',
-        showFilters: false,
-        showStats: true,
-        columns: ['Report ID', 'Course', 'Lecturer', 'Lecture Date', 'Attendance', 'Week', 'Status']
-      },
-      PL: {
-        title: '📋 Program Reports',
-        description: 'Monitor reports across your program',
-        showFilters: false,
-        showStats: true,
-        columns: ['Report ID', 'Course', 'Lecturer', 'Lecture Date', 'Attendance', 'Week', 'Status']
-      },
-      Admin: {
-        title: '📋 System Reports',
-        description: 'Complete overview of all system reports',
-        showFilters: false,
-        showStats: true,
-        columns: ['Report ID', 'Course', 'Lecturer', 'Faculty', 'Lecture Date', 'Attendance', 'Week', 'Status']
-      }
-    };
-    return config[user?.role] || config.Lecturer;
-  };
-
-  const roleConfig = getRoleConfig();
 
   if (loading) {
     return (
-      <div className="container-fluid">
-        <div className="d-flex justify-content-center align-items-center py-5">
-          <div className="text-center">
-            <div className="spinner-border text-primary mb-3" role="status">
-              <span className="visually-hidden">Loading reports...</span>
-            </div>
-            <p className="text-muted">Loading {roleConfig.title.toLowerCase()}...</p>
+      <div className="container-fluid py-4">
+        <div className="row">
+          <div className="col-12 text-center">
+            <div className="spinner-border text-primary" style={{ width: '3rem', height: '3rem' }}></div>
+            <p className="mt-2">Loading reports...</p>
           </div>
         </div>
       </div>
@@ -142,332 +101,245 @@ export default function Reports({ view = 'all' }) {
   }
 
   return (
-    <div className="container-fluid">
-      {/* Header with Role-Based Content */}
-      <div className="row mb-4">
+    <div className="container-fluid py-4">
+      <div className="row">
         <div className="col-12">
-          <div className="d-flex justify-content-between align-items-center flex-wrap">
+          <div className="d-flex justify-content-between align-items-center mb-4">
             <div>
-              <h4 className="text-primary mb-1 fw-bold">{roleConfig.title}</h4>
-              <p className="text-muted mb-0">{roleConfig.description}</p>
-            </div>
-            
-            {/* Role-Based Controls */}
-            {roleConfig.showFilters && user?.role === 'Lecturer' && (
-              <div className="btn-group btn-group-sm" role="group">
-                <button
-                  type="button"
-                  className={`btn ${filter === 'all' ? 'btn-primary' : 'btn-outline-primary'} rounded-pill`}
-                  onClick={() => handleFilterChange('all')}
-                >
-                  All Reports
-                </button>
-                <button
-                  type="button"
-                  className={`btn ${filter === 'my' ? 'btn-primary' : 'btn-outline-primary'} rounded-pill`}
-                  onClick={() => handleFilterChange('my')}
-                >
-                  My Reports
-                </button>
-              </div>
-            )}
-
-            {/* Student Progress Summary */}
-            {user?.role === 'Student' && reports.length > 0 && (
-              <div className="text-end">
-                <div className="text-success fw-bold">
-                  <i className="fas fa-chart-line me-1"></i>
-                  Overall Progress
-                </div>
-                <small className="text-muted">
-                  {reports.length} reports in your courses
-                </small>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Role-Based Stats Overview */}
-      {roleConfig.showStats && stats && (
-        <div className="row mb-4">
-          <div className="col-xl-3 col-md-6 mb-4">
-            <div className="card border-start border-primary border-4 shadow-sm h-100">
-              <div className="card-body">
-                <div className="row align-items-center">
-                  <div className="col">
-                    <div className="text-xs fw-bold text-primary text-uppercase mb-1">
-                      Total Reports
-                    </div>
-                    <div className="h5 mb-0 fw-bold text-gray-800">
-                      {stats.total_reports}
-                    </div>
-                  </div>
-                  <div className="col-auto">
-                    <i className="fas fa-clipboard-list fa-2x text-gray-300"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="col-xl-3 col-md-6 mb-4">
-            <div className="card border-start border-success border-4 shadow-sm h-100">
-              <div className="card-body">
-                <div className="row align-items-center">
-                  <div className="col">
-                    <div className="text-xs fw-bold text-success text-uppercase mb-1">
-                      Avg Attendance
-                    </div>
-                    <div className="h5 mb-0 fw-bold text-gray-800">
-                      {Math.round(stats.avg_attendance)}%
-                    </div>
-                  </div>
-                  <div className="col-auto">
-                    <i className="fas fa-users fa-2x text-gray-300"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="col-xl-3 col-md-6 mb-4">
-            <div className="card border-start border-info border-4 shadow-sm h-100">
-              <div className="card-body">
-                <div className="row align-items-center">
-                  <div className="col">
-                    <div className="text-xs fw-bold text-info text-uppercase mb-1">
-                      {user?.role === 'Lecturer' ? 'My Reports' : 'Active Lecturers'}
-                    </div>
-                    <div className="h5 mb-0 fw-bold text-gray-800">
-                      {user?.role === 'Lecturer' ? 
-                        reports.filter(r => r.lecturer_id === user.id).length : 
-                        stats.active_lecturers
-                      }
-                    </div>
-                  </div>
-                  <div className="col-auto">
-                    <i className="fas fa-chalkboard-teacher fa-2x text-gray-300"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="col-xl-3 col-md-6 mb-4">
-            <div className="card border-start border-warning border-4 shadow-sm h-100">
-              <div className="card-body">
-                <div className="row align-items-center">
-                  <div className="col">
-                    <div className="text-xs fw-bold text-warning text-uppercase mb-1">
-                      Courses Covered
-                    </div>
-                    <div className="h5 mb-0 fw-bold text-gray-800">
-                      {stats.courses_covered}
-                    </div>
-                  </div>
-                  <div className="col-auto">
-                    <i className="fas fa-book fa-2x text-gray-300"></i>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Reports Table */}
-      <div className="card shadow border-0 rounded-4 overflow-hidden">
-        <div className="card-header bg-white py-3 border-bottom">
-          <div className="d-flex justify-content-between align-items-center">
-            <h6 className="m-0 fw-bold text-primary">
-              <i className="fas fa-list me-2"></i>
-              {filter === 'my' ? 'My Lecture Reports' : roleConfig.title}
-            </h6>
-            <span className="badge bg-primary rounded-pill">
-              {reports.length} {reports.length === 1 ? 'Report' : 'Reports'}
-            </span>
-          </div>
-        </div>
-        
-        <div className="card-body">
-          {error && (
-            <div className="alert alert-danger d-flex align-items-center rounded-3" role="alert">
-              <i className="fas fa-exclamation-triangle me-2"></i>
-              <div>{error}</div>
-            </div>
-          )}
-
-          {reports.length === 0 ? (
-            <div className="text-center py-5">
-              <i className="fas fa-clipboard-list fa-4x text-muted mb-3"></i>
-              <h5 className="text-muted fw-bold">No reports found</h5>
-              <p className="text-muted mb-4">
-                {user?.role === 'Lecturer' 
-                  ? 'You haven\'t submitted any reports yet. Start by creating your first report!' 
-                  : user?.role === 'Student'
-                  ? 'No reports available for your courses yet.'
-                  : 'No reports have been submitted to the system yet.'
+              <h2 className="text-primary mb-1">
+                <i className="fas fa-clipboard-list me-2"></i>
+                {view === 'my-classes' ? 'My Class Reports' : 'Lecture Reports'}
+              </h2>
+              <p className="text-muted mb-0">
+                {view === 'my-classes' 
+                  ? 'Reports for your assigned classes' 
+                  : 'All submitted lecture reports'
                 }
               </p>
-              {user?.role === 'Lecturer' && (
-                <a href="/report" className="btn btn-primary rounded-pill px-4">
-                  <i className="fas fa-plus me-2"></i>
-                  Create First Report
+            </div>
+            <div className="d-flex gap-2">
+              {user?.role === 'Lecturer' && view !== 'my-classes' && (
+                <a href="/report" className="btn btn-primary">
+                  <i className="fas fa-plus-circle me-2"></i>
+                  New Report
                 </a>
               )}
+              <button 
+                className="btn btn-success"
+                onClick={handleExport}
+                disabled={filteredReports.length === 0}
+              >
+                <i className="fas fa-file-excel me-2"></i>
+                Export to Excel
+              </button>
             </div>
-          ) : (
-            <div className="table-responsive">
-              <table className="table table-hover align-middle">
-                <thead className="table-light">
-                  <tr>
-                    {roleConfig.columns.includes('Report ID') && <th>Report ID</th>}
-                    {roleConfig.columns.includes('Course') && <th>Course</th>}
-                    {roleConfig.columns.includes('Class') && <th>Class</th>}
-                    {roleConfig.columns.includes('Lecturer') && <th>Lecturer</th>}
-                    {roleConfig.columns.includes('Faculty') && <th>Faculty</th>}
-                    {roleConfig.columns.includes('Lecture Date') && <th>Lecture Date</th>}
-                    {roleConfig.columns.includes('Attendance') && <th>Attendance</th>}
-                    {roleConfig.columns.includes('Week') && <th>Week</th>}
-                    {roleConfig.columns.includes('Status') && <th>Status</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {reports.map(report => {
-                    const attendancePercent = getAttendancePercentage(
-                      report.actual_present, 
-                      report.total_registered
-                    );
-                    const attendanceColor = getAttendanceColor(attendancePercent);
-                    const attendanceVariant = getAttendanceVariant(attendancePercent);
+          </div>
 
-                    return (
-                      <tr key={report.id} className="hover-pointer">
-                        {roleConfig.columns.includes('Report ID') && (
-                          <td>
-                            <strong className="text-primary">LR-{report.id.toString().padStart(6, '0')}</strong>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Course') && (
-                          <td>
-                            <div>
-                              <strong className="text-dark">{report.course_name}</strong>
-                              <br />
-                              <small className="text-muted">{report.course_code}</small>
-                            </div>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Class') && (
-                          <td>
-                            <span className="fw-semibold">{report.class_name}</span>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Lecturer') && (
-                          <td>
-                            <div className="d-flex align-items-center">
-                              <i className="fas fa-user-circle text-muted me-2"></i>
-                              <span>{report.lecturer_name}</span>
-                            </div>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Faculty') && (
-                          <td>
-                            <span className="badge bg-secondary">{report.faculty_name}</span>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Lecture Date') && (
-                          <td>
-                            <div className="text-nowrap">
-                              {new Date(report.lecture_date).toLocaleDateString('en-US', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric'
-                              })}
-                            </div>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Attendance') && (
-                          <td>
-                            <div className="d-flex align-items-center">
-                              <div className="progress flex-grow-1 me-2" style={{ height: '8px' }}>
-                                <div 
-                                  className={`progress-bar ${attendanceVariant}`}
-                                  style={{ width: `${attendancePercent}%` }}
-                                ></div>
-                              </div>
-                              <div className="text-nowrap">
-                                <small className="fw-semibold">
-                                  {report.actual_present || 0}/{report.total_registered || 0}
-                                </small>
-                                <br />
-                                <small className={`text-${attendanceColor} fw-bold`}>
-                                  {attendancePercent}%
-                                </small>
-                              </div>
-                            </div>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Week') && (
-                          <td>
-                            <span className="badge bg-secondary rounded-pill">
-                              Week {report.week_of_reporting}
-                            </span>
-                          </td>
-                        )}
-                        {roleConfig.columns.includes('Status') && (
-                          <td>
-                            <span className="badge bg-success rounded-pill">
-                              <i className="fas fa-check me-1"></i>
-                              Submitted
-                            </span>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Student-Specific Progress Section */}
-      {user?.role === 'Student' && reports.length > 0 && (
-        <div className="row mt-4">
-          <div className="col-12">
-            <div className="card border-0 bg-light">
-              <div className="card-body">
-                <h6 className="text-primary mb-3">
-                  <i className="fas fa-chart-line me-2"></i>
-                  Your Learning Progress
-                </h6>
-                <div className="row text-center">
-                  <div className="col-md-4">
-                    <div className="text-success fw-bold fs-4">
-                      {reports.length}
+          {stats && view === 'all' && (
+            <div className="row mb-4">
+              <div className="col-md-3 mb-3">
+                <div className="card border-left-primary shadow h-100">
+                  <div className="card-body">
+                    <div className="d-flex justify-content-between">
+                      <div>
+                        <div className="text-xs font-weight-bold text-primary text-uppercase mb-1">
+                          Total Reports
+                        </div>
+                        <div className="h5 mb-0 font-weight-bold text-gray-800">
+                          {stats.total_reports || 0}
+                        </div>
+                      </div>
+                      <i className="fas fa-clipboard-list fa-2x text-gray-300"></i>
                     </div>
-                    <small className="text-muted">Total Sessions</small>
                   </div>
-                  <div className="col-md-4">
-                    <div className="text-info fw-bold fs-4">
-                      {Math.round(reports.reduce((acc, report) => acc + (report.actual_present / report.total_registered), 0) / reports.length * 100)}%
+                </div>
+              </div>
+              <div className="col-md-3 mb-3">
+                <div className="card border-left-success shadow h-100">
+                  <div className="card-body">
+                    <div className="d-flex justify-content-between">
+                      <div>
+                        <div className="text-xs font-weight-bold text-success text-uppercase mb-1">
+                          Avg Attendance
+                        </div>
+                        <div className="h5 mb-0 font-weight-bold text-gray-800">
+                          {stats.avg_attendance ? `${Math.round(stats.avg_attendance)}%` : '0%'}
+                        </div>
+                      </div>
+                      <i className="fas fa-users fa-2x text-gray-300"></i>
                     </div>
-                    <small className="text-muted">Avg Attendance</small>
                   </div>
-                  <div className="col-md-4">
-                    <div className="text-warning fw-bold fs-4">
-                      {new Set(reports.map(r => r.course_id)).size}
+                </div>
+              </div>
+              <div className="col-md-3 mb-3">
+                <div className="card border-left-info shadow h-100">
+                  <div className="card-body">
+                    <div className="d-flex justify-content-between">
+                      <div>
+                        <div className="text-xs font-weight-bold text-info text-uppercase mb-1">
+                          Active Lecturers
+                        </div>
+                        <div className="h5 mb-0 font-weight-bold text-gray-800">
+                          {stats.active_lecturers || 0}
+                        </div>
+                      </div>
+                      <i className="fas fa-chalkboard-teacher fa-2x text-gray-300"></i>
                     </div>
-                    <small className="text-muted">Courses</small>
+                  </div>
+                </div>
+              </div>
+              <div className="col-md-3 mb-3">
+                <div className="card border-left-warning shadow h-100">
+                  <div className="card-body">
+                    <div className="d-flex justify-content-between">
+                      <div>
+                        <div className="text-xs font-weight-bold text-warning text-uppercase mb-1">
+                          Courses Covered
+                        </div>
+                        <div className="h5 mb-0 font-weight-bold text-gray-800">
+                          {stats.courses_covered || 0}
+                        </div>
+                      </div>
+                      <i className="fas fa-book fa-2x text-gray-300"></i>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
+          )}
+
+          {error && (
+            <div className="alert alert-danger" role="alert">
+              <i className="fas fa-exclamation-circle me-2"></i>
+              {error}
+            </div>
+          )}
+
+          <div className="card shadow">
+            <div className="card-header bg-white">
+              <div className="row">
+                <div className="col-md-4 mb-2">
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Filter by course..."
+                    name="course"
+                    value={filter.course}
+                    onChange={handleFilterChange}
+                  />
+                </div>
+                <div className="col-md-4 mb-2">
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Filter by lecturer..."
+                    name="lecturer"
+                    value={filter.lecturer}
+                    onChange={handleFilterChange}
+                  />
+                </div>
+                <div className="col-md-4 mb-2">
+                  <input
+                    type="number"
+                    className="form-control"
+                    placeholder="Filter by week..."
+                    name="week"
+                    value={filter.week}
+                    onChange={handleFilterChange}
+                    min="1"
+                    max="52"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="card-body">
+              {filteredReports.length === 0 ? (
+                <div className="text-center py-5">
+                  <i className="fas fa-clipboard-list fa-3x text-muted mb-3"></i>
+                  <h5 className="text-muted">No reports found</h5>
+                  <p className="text-muted">
+                    {filter.course || filter.lecturer || filter.week 
+                      ? 'Try adjusting your filters' 
+                      : 'No reports have been submitted yet'
+                    }
+                  </p>
+                </div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table table-hover">
+                    <thead>
+                      <tr>
+                        <th>Course</th>
+                        <th>Lecturer</th>
+                        <th>Week</th>
+                        <th>Date</th>
+                        <th>Attendance</th>
+                        <th>Topic</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredReports.map((report) => (
+                        <tr key={report.id}>
+                          <td>
+                            <strong>{report.course_code}</strong>
+                            <br />
+                            <small className="text-muted">{report.course_name}</small>
+                          </td>
+                          <td>{report.lecturer_name}</td>
+                          <td>
+                            <span className="badge bg-primary">Week {report.week_of_reporting}</span>
+                          </td>
+                          <td>
+                            {new Date(report.lecture_date).toLocaleDateString()}
+                          </td>
+                          <td>
+                            <div className="d-flex align-items-center">
+                              <div className="progress flex-grow-1 me-2" style={{ height: '6px' }}>
+                                <div
+                                  className={`progress-bar ${
+                                    getAttendanceRate(report.actual_present, report.total_registered) >= 80
+                                      ? 'bg-success'
+                                      : getAttendanceRate(report.actual_present, report.total_registered) >= 60
+                                      ? 'bg-warning'
+                                      : 'bg-danger'
+                                  }`}
+                                  style={{
+                                    width: `${getAttendanceRate(report.actual_present, report.total_registered)}%`
+                                  }}
+                                ></div>
+                              </div>
+                              <small>
+                                {getAttendanceRate(report.actual_present, report.total_registered)}%
+                              </small>
+                            </div>
+                            <small className="text-muted">
+                              {report.actual_present}/{report.total_registered}
+                            </small>
+                          </td>
+                          <td>
+                            {report.topic || (
+                              <span className="text-muted">No topic specified</span>
+                            )}
+                          </td>
+                          <td>
+                            <button
+                              className="btn btn-sm btn-outline-primary"
+                              onClick={() => {/* Add view details functionality */}}
+                            >
+                              <i className="fas fa-eye"></i>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

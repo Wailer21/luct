@@ -10,11 +10,7 @@ const rateLimit = require("express-rate-limit");
 
 dotenv.config();
 const app = express();
-// ✅ Allowed origins
-const allowedOrigins = [
-  "http://localhost:3000",                         // local dev
-  "https://frontend-8tlqmgw6n-thomonyaneneo-gmailcoms-projects.vercel.app" // Vercel
-];
+
 // PostgreSQL connection configuration
 const dbConfig = {
   connectionString: process.env.DATABASE_URL || "postgresql://luct_reports_user:VfNK4tNbsVQ58Bvh4glC1dVQ4cPDjbm5@dpg-d36jogadbo4c73dse7l0-a.virginia-postgres.render.com/luct_reports",
@@ -152,7 +148,7 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// ---------- Validation middlewares ----------
+// ---------- UPDATED Validation middlewares ----------
 function validateRegister(req, res, next) {
   const { email, password, role } = req.body;
   if (!email || !password || !role) return sendError(res, "Email, password, and role are required", 400);
@@ -164,10 +160,16 @@ function validateRegister(req, res, next) {
 }
 
 function validateReport(req, res, next) {
-  const { class_id, week_of_reporting, lecture_date, course_id, actual_present } = req.body;
+  const { class_name, week_of_reporting, lecture_date, course_id, actual_present } = req.body;
   
-  if (!class_id || !week_of_reporting || !lecture_date || !course_id || actual_present === undefined) {
+  // Updated to require class_name instead of class_id
+  if (!class_name || !week_of_reporting || !lecture_date || !course_id || actual_present === undefined) {
     return sendError(res, "All required fields must be filled", 400);
+  }
+  
+  // Validate class name format (BSCSEM1-A, BSCITY2-B, etc.)
+  if (!class_name.match(/^[A-Z0-9]+-[A-Z0-9]+$/)) {
+    return sendError(res, "Class name must be in format: ProgramCodeYear-Group (e.g., BSCSEM1-A)", 400);
   }
   
   // Fix week validation - extract number from "week X" format
@@ -450,6 +452,219 @@ app.get("/api/my-classes", authenticateToken, async (req, res) => {
     sendError(res, "Failed to fetch your classes: " + error.message);
   }
 });
+
+// -----------------
+// UPDATED REPORTS ROUTES
+// -----------------
+app.get("/api/reports", authenticateToken, async (req, res) => {
+  try {
+    let query = `
+      SELECT r.*, f.name as faculty_name, r.class_name,
+             c.code as course_code, c.name as course_name,
+             CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
+             fb.first_name as feedback_by_first_name,
+             fb.last_name as feedback_by_last_name
+      FROM reports r
+      JOIN faculties f ON r.faculty_id = f.id
+      JOIN courses c ON r.course_id = c.id
+      JOIN users u ON r.lecturer_id = u.id
+      LEFT JOIN users fb ON r.feedback_by = fb.id
+    `;
+
+    // If user is a lecturer, only show their reports
+    if (req.user.role === 'Lecturer') {
+      query += ` WHERE r.lecturer_id = $1 ORDER BY r.created_at DESC LIMIT 50`;
+      const rows = await executeQuery(query, [req.user.id]);
+      return sendSuccess(res, rows.rows, "Reports fetched successfully");
+    }
+
+    // For other roles, show all reports
+    query += ` ORDER BY r.created_at DESC LIMIT 50`;
+    const rows = await executeQuery(query);
+    sendSuccess(res, rows.rows, "Reports fetched successfully");
+
+  } catch (error) {
+    console.error("❌ Reports error:", error);
+    sendError(res, "Failed to fetch reports: " + error.message);
+  }
+});
+
+app.get("/api/reports/stats", authenticateToken, async (req, res) => {
+  try {
+    let query = `
+      SELECT 
+        COUNT(*) as total_reports,
+        COALESCE(AVG(r.actual_present::float / NULLIF(r.total_registered, 0)) * 100, 0) as avg_attendance,
+        COUNT(DISTINCT r.lecturer_id) as active_lecturers,
+        COUNT(DISTINCT r.course_id) as courses_covered
+      FROM reports r
+    `;
+
+    if (req.user.role === 'Lecturer') {
+      query += ` WHERE r.lecturer_id = $1`;
+      const stats = await executeQuery(query, [req.user.id]);
+      return sendSuccess(res, {
+        total_reports: parseInt(stats.rows[0].total_reports) || 0,
+        avg_attendance: parseFloat(stats.rows[0].avg_attendance) || 0,
+        active_lecturers: parseInt(stats.rows[0].active_lecturers) || 0,
+        courses_covered: parseInt(stats.rows[0].courses_covered) || 0
+      }, "Statistics fetched successfully");
+    }
+
+    const stats = await executeQuery(query);
+    sendSuccess(res, {
+      total_reports: parseInt(stats.rows[0].total_reports) || 0,
+      avg_attendance: parseFloat(stats.rows[0].avg_attendance) || 0,
+      active_lecturers: parseInt(stats.rows[0].active_lecturers) || 0,
+      courses_covered: parseInt(stats.rows[0].courses_covered) || 0
+    }, "Statistics fetched successfully");
+
+  } catch (error) {
+    console.error("❌ Stats error:", error);
+    sendError(res, "Failed to fetch statistics: " + error.message);
+  }
+});
+
+// UPDATED: Report creation to handle class names
+app.post("/api/reports", authenticateToken, validateReport, async (req, res) => {
+  if (!isDatabaseConnected) {
+    return sendError(res, "Database temporarily unavailable. Please try again later.", 503);
+  }
+
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const {
+      faculty_id,
+      class_name, // Now using class_name instead of class_id
+      week_of_reporting,
+      lecture_date,
+      course_id,
+      actual_present,
+      total_registered,
+      venue,
+      scheduled_time,
+      topic,
+      learning_outcomes,
+      recommendations,
+    } = req.body;
+
+    console.log('📝 Creating report with class name:', class_name);
+
+    // Get course code for the report
+    const courseRes = await client.query("SELECT code FROM courses WHERE id = $1", [course_id]);
+    if (!courseRes.rows.length) {
+      await client.query('ROLLBACK');
+      return sendError(res, "Course not found", 404);
+    }
+    const course_code = courseRes.rows[0].code;
+
+    // Check if class exists, if not we'll still create the report but log it
+    const classRes = await client.query(
+      "SELECT id FROM classes WHERE class_name = $1", 
+      [class_name.toUpperCase()]
+    );
+
+    let class_id = null;
+    if (classRes.rows.length > 0) {
+      class_id = classRes.rows[0].id;
+      console.log('✅ Found existing class:', class_name, 'ID:', class_id);
+    } else {
+      console.log('⚠️ Class not found in database, but creating report anyway:', class_name);
+    }
+
+    const insertRes = await client.query(
+      `INSERT INTO reports (
+        faculty_id, class_id, class_name, week_of_reporting, lecture_date,
+        course_id, course_code, lecturer_id, actual_present, total_registered, 
+        venue, scheduled_time, topic, learning_outcomes, recommendations, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW()) 
+       RETURNING id`,
+      [
+        faculty_id,
+        class_id, // Can be null if class doesn't exist
+        class_name.toUpperCase(), // Store the class name
+        week_of_reporting,
+        lecture_date,
+        course_id,
+        course_code,
+        req.user.id,
+        actual_present,
+        total_registered || 0,
+        venue || null,
+        scheduled_time || null,
+        topic || '',
+        learning_outcomes || '',
+        recommendations || null,
+      ]
+    );
+
+    await client.query('COMMIT');
+    
+    console.log('✅ Report created successfully by user:', req.user.id, 'for class:', class_name);
+    sendCreated(res, { id: insertRes.rows[0].id }, "Report created successfully");
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Create report error:", error);
+    sendError(res, "Failed to create report: " + error.message);
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/reports/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rows = await executeQuery(
+      `SELECT r.*, f.name as faculty_name, r.class_name,
+              c.code as course_code, c.name as course_name,
+              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
+              fb.first_name as feedback_by_first_name,
+              fb.last_name as feedback_by_last_name
+       FROM reports r
+       JOIN faculties f ON r.faculty_id = f.id
+       JOIN courses c ON r.course_id = c.id
+       JOIN users u ON r.lecturer_id = u.id
+       LEFT JOIN users fb ON r.feedback_by = fb.id
+       WHERE r.id = $1`,
+      [id]
+    );
+
+    if (!rows.rows.length) return sendError(res, "Report not found", 404);
+    
+    sendSuccess(res, rows.rows[0], "Report fetched successfully");
+  } catch (error) {
+    console.error("❌ Get report error:", error);
+    sendError(res, "Failed to fetch report: " + error.message);
+  }
+});
+
+app.post("/api/reports/:id/feedback", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { feedback } = req.body;
+
+    console.log(`📝 Submitting feedback for report ${id} by user ${req.user.id}`);
+
+    const result = await executeQuery(
+      `UPDATE reports SET feedback = $1, feedback_by = $2, feedback_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [feedback, req.user.id, id]
+    );
+
+    if (!result.rows.length) return sendError(res, "Report not found", 404);
+
+    console.log('✅ Feedback submitted successfully');
+    sendSuccess(res, result.rows[0], "Feedback submitted successfully");
+  } catch (error) {
+    console.error("❌ Feedback error:", error);
+    sendError(res, "Failed to submit feedback: " + error.message);
+  }
+});
+
 // ========================
 // COURSE MANAGEMENT ROUTES
 // ========================
@@ -664,11 +879,10 @@ app.get("/api/students/attendance", authenticateToken, async (req, res) => {
     let query = `
       SELECT r.*, c.name as course_name, c.code as course_code,
              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
-             cl.class_name, f.name as faculty_name
+             r.class_name, f.name as faculty_name
       FROM reports r
       JOIN courses c ON r.course_id = c.id
       JOIN users u ON r.lecturer_id = u.id
-      JOIN classes cl ON r.class_id = cl.id
       JOIN faculties f ON r.faculty_id = f.id
       WHERE 1=1
     `;
@@ -1023,6 +1237,7 @@ app.get("/api/reports/weekly-trend", authenticateToken, async (req, res) => {
     sendError(res, "Failed to fetch weekly trends: " + error.message);
   }
 });
+
 // ========================
 // LECTURERS ROUTES
 // ========================
@@ -1157,186 +1372,6 @@ app.post("/api/ratings", authenticateToken, async (req, res) => {
   }
 });
 
-// -----------------
-// REPORTS ROUTES
-// -----------------
-app.get("/api/reports", authenticateToken, async (req, res) => {
-  try {
-    let query = `
-      SELECT r.*, f.name as faculty_name, cl.class_name,
-             c.code as course_code, c.name as course_name,
-             CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
-             fb.first_name as feedback_by_first_name,
-             fb.last_name as feedback_by_last_name
-      FROM reports r
-      JOIN faculties f ON r.faculty_id = f.id
-      JOIN classes cl ON r.class_id = cl.id
-      JOIN courses c ON r.course_id = c.id
-      JOIN users u ON r.lecturer_id = u.id
-      LEFT JOIN users fb ON r.feedback_by = fb.id
-    `;
-
-    // If user is a lecturer, only show their reports
-    if (req.user.role === 'Lecturer') {
-      query += ` WHERE r.lecturer_id = $1 ORDER BY r.created_at DESC LIMIT 50`;
-      const rows = await executeQuery(query, [req.user.id]);
-      return sendSuccess(res, rows.rows, "Reports fetched successfully");
-    }
-
-    // For other roles, show all reports
-    query += ` ORDER BY r.created_at DESC LIMIT 50`;
-    const rows = await executeQuery(query);
-    sendSuccess(res, rows.rows, "Reports fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Reports error:", error);
-    sendError(res, "Failed to fetch reports: " + error.message);
-  }
-});
-
-app.get("/api/reports/stats", authenticateToken, async (req, res) => {
-  try {
-    let query = `
-      SELECT 
-        COUNT(*) as total_reports,
-        COALESCE(AVG(r.actual_present::float / NULLIF(r.total_registered, 0)) * 100, 0) as avg_attendance,
-        COUNT(DISTINCT r.lecturer_id) as active_lecturers,
-        COUNT(DISTINCT r.course_id) as courses_covered
-      FROM reports r
-    `;
-
-    if (req.user.role === 'Lecturer') {
-      query += ` WHERE r.lecturer_id = $1`;
-      const stats = await executeQuery(query, [req.user.id]);
-      return sendSuccess(res, {
-        total_reports: parseInt(stats.rows[0].total_reports) || 0,
-        avg_attendance: parseFloat(stats.rows[0].avg_attendance) || 0,
-        active_lecturers: parseInt(stats.rows[0].active_lecturers) || 0,
-        courses_covered: parseInt(stats.rows[0].courses_covered) || 0
-      }, "Statistics fetched successfully");
-    }
-
-    const stats = await executeQuery(query);
-    sendSuccess(res, {
-      total_reports: parseInt(stats.rows[0].total_reports) || 0,
-      avg_attendance: parseFloat(stats.rows[0].avg_attendance) || 0,
-      active_lecturers: parseInt(stats.rows[0].active_lecturers) || 0,
-      courses_covered: parseInt(stats.rows[0].courses_covered) || 0
-    }, "Statistics fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Stats error:", error);
-    sendError(res, "Failed to fetch statistics: " + error.message);
-  }
-});
-
-app.post("/api/reports", authenticateToken, validateReport, async (req, res) => {
-  try {
-    const {
-      faculty_id,
-      class_id,
-      week_of_reporting,
-      lecture_date,
-      course_id,
-      actual_present,
-      total_registered,
-      venue,
-      scheduled_time,
-      topic,
-      learning_outcomes,
-      recommendations,
-    } = req.body;
-
-    // Get course code for the report
-    const courseRes = await executeQuery("SELECT code FROM courses WHERE id = $1", [course_id]);
-    if (!courseRes.rows.length) return sendError(res, "Course not found", 404);
-    const course_code = courseRes.rows[0].code;
-
-    const insertRes = await executeQuery(
-      `INSERT INTO reports (
-        faculty_id, class_id, week_of_reporting, lecture_date,
-        course_id, course_code, lecturer_id, actual_present, total_registered, 
-        venue, scheduled_time, topic, learning_outcomes, recommendations, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()) 
-       RETURNING id`,
-      [
-        faculty_id,
-        class_id,
-        week_of_reporting,
-        lecture_date,
-        course_id,
-        course_code,
-        req.user.id,
-        actual_present,
-        total_registered || 0,
-        venue || null,
-        scheduled_time || null,
-        topic || '',
-        learning_outcomes || '',
-        recommendations || null,
-      ]
-    );
-
-    console.log('✅ Report created successfully by user:', req.user.id);
-    sendCreated(res, { id: insertRes.rows[0].id }, "Report created successfully");
-
-  } catch (error) {
-    console.error("❌ Create report error:", error);
-    sendError(res, "Failed to create report: " + error.message);
-  }
-});
-
-app.get("/api/reports/:id", authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const rows = await executeQuery(
-      `SELECT r.*, f.name as faculty_name, cl.class_name,
-              c.code as course_code, c.name as course_name,
-              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
-              fb.first_name as feedback_by_first_name,
-              fb.last_name as feedback_by_last_name
-       FROM reports r
-       JOIN faculties f ON r.faculty_id = f.id
-       JOIN classes cl ON r.class_id = cl.id
-       JOIN courses c ON r.course_id = c.id
-       JOIN users u ON r.lecturer_id = u.id
-       LEFT JOIN users fb ON r.feedback_by = fb.id
-       WHERE r.id = $1`,
-      [id]
-    );
-
-    if (!rows.rows.length) return sendError(res, "Report not found", 404);
-    
-    sendSuccess(res, rows.rows[0], "Report fetched successfully");
-  } catch (error) {
-    console.error("❌ Get report error:", error);
-    sendError(res, "Failed to fetch report: " + error.message);
-  }
-});
-
-app.post("/api/reports/:id/feedback", authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { feedback } = req.body;
-
-    console.log(`📝 Submitting feedback for report ${id} by user ${req.user.id}`);
-
-    const result = await executeQuery(
-      `UPDATE reports SET feedback = $1, feedback_by = $2, feedback_at = NOW()
-       WHERE id = $3 RETURNING *`,
-      [feedback, req.user.id, id]
-    );
-
-    if (!result.rows.length) return sendError(res, "Report not found", 404);
-
-    console.log('✅ Feedback submitted successfully');
-    sendSuccess(res, result.rows[0], "Feedback submitted successfully");
-  } catch (error) {
-    console.error("❌ Feedback error:", error);
-    sendError(res, "Failed to submit feedback: " + error.message);
-  }
-});
-
 // ========================
 // ENHANCED SEARCH ROUTE
 // ========================
@@ -1366,7 +1401,7 @@ app.get("/api/search", authenticateToken, async (req, res) => {
        FROM reports r
        JOIN courses c ON r.course_id = c.id
        JOIN users u ON r.lecturer_id = u.id
-       WHERE c.name ILIKE $1 OR c.code ILIKE $1 OR r.topic ILIKE $1
+       WHERE c.name ILIKE $1 OR c.code ILIKE $1 OR r.topic ILIKE $1 OR r.class_name ILIKE $1
        ORDER BY r.created_at DESC
        LIMIT 10`,
       [searchTerm]
