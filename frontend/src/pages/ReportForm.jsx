@@ -6,7 +6,7 @@ import { apiMethods } from '../utils/api';
 export default function ReportForm() {
   const [formData, setFormData] = useState({
     faculty_id: '',
-    class_name: '', // Changed from class_id to class_name
+    class_name: '', // Using class_name
     week_of_reporting: '',
     lecture_date: '',
     course_id: '',
@@ -36,7 +36,6 @@ export default function ReportForm() {
     try {
       console.log('🔄 Fetching initial data...');
       
-      // Fetch data sequentially to avoid overwhelming the backend
       const facultiesRes = await apiMethods.getFaculties();
       if (facultiesRes.success) {
         setFaculties(facultiesRes.data);
@@ -49,7 +48,6 @@ export default function ReportForm() {
         console.log('✅ Courses loaded:', coursesRes.data.length);
       }
 
-      // Only fetch classes if user is lecturer
       if (user?.role === 'Lecturer') {
         const classesRes = await apiMethods.getMyClasses();
         if (classesRes.success) {
@@ -79,7 +77,7 @@ export default function ReportForm() {
     setError('');
     setSuccess('');
 
-    // Validate required fields - updated to use class_name instead of class_id
+    // Validate required fields
     const requiredFields = ['faculty_id', 'class_name', 'week_of_reporting', 'lecture_date', 'course_id', 'actual_present'];
     const missingFields = requiredFields.filter(field => !formData[field]);
     
@@ -90,15 +88,21 @@ export default function ReportForm() {
     }
 
     try {
-      console.log('📤 Submitting report:', formData);
+      // Include lecturer_id from authenticated user
+      const submissionData = {
+        ...formData,
+        lecturer_id: user?.id
+      };
       
-      const response = await apiMethods.createReport(formData);
+      console.log('📤 Submitting report:', submissionData);
+      
+      const response = await apiMethods.createReport(submissionData);
       
       if (response.success) {
         setSuccess('Report submitted successfully!');
         setFormData({
           faculty_id: '',
-          class_name: '', // Updated to class_name
+          class_name: '',
           week_of_reporting: '',
           lecture_date: '',
           course_id: '',
@@ -119,7 +123,6 @@ export default function ReportForm() {
     } catch (err) {
       console.error('❌ Report submission error:', err);
       
-      // Show specific error message from backend if available
       if (err.data && err.data.message) {
         setError(`Submission failed: ${err.data.message}`);
       } else {
@@ -197,7 +200,7 @@ export default function ReportForm() {
 
                   <div className="col-md-6 mb-3">
                     <label htmlFor="class_name" className="form-label">
-                      Class Code *
+                      Class Name *
                     </label>
                     <input
                       type="text"
@@ -206,7 +209,7 @@ export default function ReportForm() {
                       name="class_name"
                       value={formData.class_name}
                       onChange={handleChange}
-                      placeholder="Enter class code (e.g., BSCSEM1-A)"
+                      placeholder="Enter class name (e.g., BSCSEM1-A)"
                       required
                       disabled={loading}
                     />
@@ -216,6 +219,7 @@ export default function ReportForm() {
                   </div>
                 </div>
 
+                {/* Rest of your form remains the same */}
                 <div className="row">
                   <div className="col-md-4 mb-3">
                     <label htmlFor="week_of_reporting" className="form-label">
@@ -230,6 +234,7 @@ export default function ReportForm() {
                       onChange={handleChange}
                       min="1"
                       max="52"
+                      placeholder="Enter week number (1-52)"
                       required
                       disabled={loading}
                     />

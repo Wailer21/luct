@@ -159,6 +159,7 @@ function validateRegister(req, res, next) {
   next();
 }
 
+// UPDATED: Improved week validation that handles both numbers and "week X" format
 function validateReport(req, res, next) {
   const { class_name, week_of_reporting, lecture_date, course_id, actual_present } = req.body;
   
@@ -168,24 +169,37 @@ function validateReport(req, res, next) {
   }
   
   // Validate class name format (BSCSEM1-A, BSCITY2-B, etc.)
-  if (!class_name.match(/^[A-Z0-9]+-[A-Z0-9]+$/)) {
-    return sendError(res, "Class name must be in format: ProgramCodeYear-Group (e.g., BSCSEM1-A)", 400);
+  const classRegex = /^[A-Z]{3,}[A-Z0-9]*-\w+$/;
+  if (!class_name.match(classRegex)) {
+    return sendError(res, "Class name must be in format: ProgramCodeYear-Group (e.g., BSCSEM1-A, BSCITY2-B)", 400);
   }
   
-  // Fix week validation - extract number from "week X" format
+  // IMPROVED: Better week validation that handles both numbers and "week X" format
   let weekNumber = week_of_reporting;
-  if (typeof week_of_reporting === 'string' && week_of_reporting.toLowerCase().includes('week')) {
+  
+  // If it's a string, try to extract number from "week X" format
+  if (typeof week_of_reporting === 'string') {
     const weekMatch = week_of_reporting.match(/\d+/);
-    weekNumber = weekMatch ? parseInt(weekMatch[0]) : week_of_reporting;
+    if (weekMatch) {
+      weekNumber = parseInt(weekMatch[0]);
+    } else {
+      // Try to parse as number directly
+      weekNumber = parseInt(week_of_reporting);
+    }
   }
   
+  // Final validation
   if (isNaN(weekNumber) || Number(weekNumber) < 1 || Number(weekNumber) > 52) {
     return sendError(res, "Week must be a number between 1 and 52", 400);
   }
   
   if (Number(actual_present) < 0) return sendError(res, "Actual present cannot be negative", 400);
   
-  if (new Date(lecture_date) > new Date()) {
+  const lectureDate = new Date(lecture_date);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Reset time part for accurate date comparison
+  
+  if (lectureDate > today) {
     return sendError(res, "Lecture date cannot be in the future", 400);
   }
   
@@ -454,7 +468,7 @@ app.get("/api/my-classes", authenticateToken, async (req, res) => {
 });
 
 // -----------------
-// UPDATED REPORTS ROUTES
+// UPDATED REPORTS ROUTES - Now using class_name
 // -----------------
 app.get("/api/reports", authenticateToken, async (req, res) => {
   try {
@@ -585,7 +599,7 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
       [
         faculty_id,
         class_id, // Can be null if class doesn't exist
-        class_name.toUpperCase(), // Store the class name
+        class_name.toUpperCase(), // Store the class name in uppercase
         week_of_reporting,
         lecture_date,
         course_id,
@@ -609,6 +623,12 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("❌ Create report error:", error);
+    
+    // Handle specific database errors
+    if (error.code === '42703') { // undefined column error
+      return sendError(res, "Database schema needs update. Please add 'class_name' column to reports table.", 500);
+    }
+    
     sendError(res, "Failed to create report: " + error.message);
   } finally {
     client.release();
@@ -866,589 +886,8 @@ app.get("/api/reports/:id/feedback", authenticateToken, async (req, res) => {
 });
 
 // ========================
-// STUDENT MONITORING ROUTES
-// ========================
-app.get("/api/students/attendance", authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== 'Student') {
-      return sendError(res, "Access denied. Students only.", 403);
-    }
-
-    const { course_id, month, time_range = 'current_semester' } = req.query;
-
-    let query = `
-      SELECT r.*, c.name as course_name, c.code as course_code,
-             CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
-             r.class_name, f.name as faculty_name
-      FROM reports r
-      JOIN courses c ON r.course_id = c.id
-      JOIN users u ON r.lecturer_id = u.id
-      JOIN faculties f ON r.faculty_id = f.id
-      WHERE 1=1
-    `;
-
-    const params = [];
-    let paramCount = 0;
-
-    // Add course filter if provided
-    if (course_id) {
-      paramCount++;
-      query += ` AND r.course_id = $${paramCount}`;
-      params.push(course_id);
-    }
-
-    // Add time range filter
-    if (time_range === 'last_7_days') {
-      query += ` AND r.lecture_date >= CURRENT_DATE - INTERVAL '7 days'`;
-    } else if (time_range === 'last_30_days') {
-      query += ` AND r.lecture_date >= CURRENT_DATE - INTERVAL '30 days'`;
-    } else if (time_range === 'current_semester') {
-      query += ` AND r.lecture_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '3 months'`;
-    }
-
-    query += ` ORDER BY r.lecture_date DESC`;
-
-    const result = await executeQuery(query, params);
-
-    // Calculate attendance stats
-    const totalClasses = result.rows.length;
-    const attendedClasses = result.rows.filter(report => report.actual_present > 0).length;
-    const attendanceRate = totalClasses > 0 ? (attendedClasses / totalClasses) * 100 : 0;
-
-    sendSuccess(res, {
-      reports: result.rows,
-      stats: {
-        totalClasses,
-        attendedClasses,
-        missedClasses: totalClasses - attendedClasses,
-        attendanceRate: Math.round(attendanceRate)
-      }
-    }, "Attendance data fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Student attendance error:", error);
-    sendError(res, "Failed to fetch attendance data: " + error.message);
-  }
-});
-
-app.get("/api/students/stats", authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== 'Student') {
-      return sendError(res, "Access denied. Students only.", 403);
-    }
-
-    const { time_range = 'current_semester' } = req.query;
-
-    let dateFilter = '';
-    if (time_range === 'last_7_days') {
-      dateFilter = "AND r.lecture_date >= CURRENT_DATE - INTERVAL '7 days'";
-    } else if (time_range === 'last_30_days') {
-      dateFilter = "AND r.lecture_date >= CURRENT_DATE - INTERVAL '30 days'";
-    } else if (time_range === 'current_semester') {
-      dateFilter = "AND r.lecture_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '3 months'";
-    }
-
-    const statsQuery = `
-      SELECT 
-        COUNT(DISTINCT r.id) as total_classes,
-        COUNT(DISTINCT CASE WHEN r.actual_present > 0 THEN r.id END) as attended_classes,
-        COUNT(DISTINCT r.course_id) as courses_enrolled,
-        COUNT(DISTINCT r.lecturer_id) as lecturers_count,
-        EXTRACT(WEEK FROM CURRENT_DATE) as current_week
-      FROM reports r
-      WHERE 1=1 ${dateFilter}
-    `;
-
-    const statsResult = await executeQuery(statsQuery);
-
-    const stats = statsResult.rows[0];
-    const attendanceRate = stats.total_classes > 0 ? 
-      (stats.attended_classes / stats.total_classes) * 100 : 0;
-
-    sendSuccess(res, {
-      overview: {
-        total_classes: parseInt(stats.total_classes) || 0,
-        attended_classes: parseInt(stats.attended_classes) || 0,
-        missed_classes: parseInt(stats.total_classes) - parseInt(stats.attended_classes) || 0,
-        attendance_rate: Math.round(attendanceRate) || 0,
-        courses_enrolled: parseInt(stats.courses_enrolled) || 0,
-        lecturers_count: parseInt(stats.lecturers_count) || 0,
-        current_week: parseInt(stats.current_week) || 1
-      }
-    }, "Student stats fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Student stats error:", error);
-    sendError(res, "Failed to fetch student statistics: " + error.message);
-  }
-});
-
-app.get("/api/students/performance", authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== 'Student') {
-      return sendError(res, "Access denied. Students only.", 403);
-    }
-
-    const performanceQuery = `
-      SELECT 
-        c.id as course_id,
-        c.name as course_name,
-        c.code as course_code,
-        COUNT(r.id) as total_classes,
-        COUNT(CASE WHEN r.actual_present > 0 THEN r.id END) as attended_classes,
-        CASE 
-          WHEN COUNT(r.id) > 0 THEN 
-            ROUND((COUNT(CASE WHEN r.actual_present > 0 THEN r.id END)::decimal / COUNT(r.id)) * 100)
-          ELSE 0 
-        END as attendance_rate,
-        COALESCE(AVG(rat.rating), 0) as performance_score,
-        CASE 
-          WHEN COALESCE(AVG(rat.rating), 0) >= 4.5 THEN 'A'
-          WHEN COALESCE(AVG(rat.rating), 0) >= 3.5 THEN 'B'
-          WHEN COALESCE(AVG(rat.rating), 0) >= 2.5 THEN 'C'
-          WHEN COALESCE(AVG(rat.rating), 0) >= 1.5 THEN 'D'
-          ELSE 'F'
-        END as grade
-      FROM courses c
-      LEFT JOIN reports r ON c.id = r.course_id
-      LEFT JOIN ratings rat ON c.id = rat.course_id AND rat.user_id = $1
-      GROUP BY c.id, c.name, c.code
-      HAVING COUNT(r.id) > 0
-      ORDER BY c.name
-    `;
-
-    const result = await executeQuery(performanceQuery, [req.user.id]);
-
-    sendSuccess(res, result.rows, "Performance data fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Student performance error:", error);
-    sendError(res, "Failed to fetch performance data: " + error.message);
-  }
-});
-
-// ========================
-// ANALYTICS ROUTES
-// ========================
-app.get("/api/analytics/overview", authenticateToken, async (req, res) => {
-  try {
-    if (!['PRL', 'Admin'].includes(req.user.role)) {
-      return sendError(res, "Access denied. PRL and Admin only.", 403);
-    }
-
-    const overviewQuery = `
-      SELECT 
-        -- Overall stats
-        COUNT(DISTINCT u.id) as total_users,
-        COUNT(DISTINCT CASE WHEN r.name = 'Student' THEN u.id END) as total_students,
-        COUNT(DISTINCT CASE WHEN r.name = 'Lecturer' THEN u.id END) as total_lecturers,
-        COUNT(DISTINCT c.id) as total_courses,
-        COUNT(DISTINCT cl.id) as total_classes,
-        COUNT(DISTINCT rep.id) as total_reports,
-        
-        -- Attendance stats
-        ROUND(AVG(rep.actual_present::decimal / NULLIF(rep.total_registered, 0)) * 100, 2) as avg_attendance_rate,
-        
-        -- Rating stats
-        ROUND(AVG(rat.rating), 2) as avg_rating,
-        COUNT(rat.id) as total_ratings,
-        
-        -- Recent activity
-        COUNT(DISTINCT CASE WHEN rep.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN rep.id END) as recent_reports,
-        COUNT(DISTINCT CASE WHEN rat.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN rat.id END) as recent_ratings
-        
-      FROM users u
-      JOIN roles r ON u.role_id = r.id
-      LEFT JOIN courses c ON 1=1
-      LEFT JOIN classes cl ON 1=1
-      LEFT JOIN reports rep ON 1=1
-      LEFT JOIN ratings rat ON 1=1
-    `;
-
-    const result = await executeQuery(overviewQuery);
-
-    sendSuccess(res, result.rows[0], "Analytics overview fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Analytics overview error:", error);
-    sendError(res, "Failed to fetch analytics overview: " + error.message);
-  }
-});
-
-app.get("/api/analytics/trends", authenticateToken, async (req, res) => {
-  try {
-    if (!['PRL', 'Admin'].includes(req.user.role)) {
-      return sendError(res, "Access denied. PRL and Admin only.", 403);
-    }
-
-    const trendsQuery = `
-      SELECT 
-        DATE_TRUNC('week', rep.created_at) as week_start,
-        COUNT(rep.id) as reports_count,
-        ROUND(AVG(rep.actual_present::decimal / NULLIF(rep.total_registered, 0)) * 100, 2) as avg_attendance,
-        COUNT(DISTINCT rep.lecturer_id) as active_lecturers,
-        COUNT(DISTINCT rep.course_id) as courses_covered
-      FROM reports rep
-      WHERE rep.created_at >= CURRENT_DATE - INTERVAL '12 weeks'
-      GROUP BY DATE_TRUNC('week', rep.created_at)
-      ORDER BY week_start DESC
-      LIMIT 12
-    `;
-
-    const result = await executeQuery(trendsQuery);
-
-    sendSuccess(res, result.rows, "Trends data fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Analytics trends error:", error);
-    sendError(res, "Failed to fetch trends data: " + error.message);
-  }
-});
-
-// ========================
-// USER MANAGEMENT ROUTES (Admin only)
-// ========================
-app.get("/api/users", authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== 'Admin') {
-      return sendError(res, "Access denied. Admin only.", 403);
-    }
-
-    const usersQuery = `
-      SELECT 
-        u.id, u.first_name, u.last_name, u.email, 
-        r.name as role, u.created_at,
-        COUNT(DISTINCT rep.id) as total_reports,
-        COUNT(DISTINCT rat.id) as total_ratings
-      FROM users u
-      JOIN roles r ON u.role_id = r.id
-      LEFT JOIN reports rep ON u.id = rep.lecturer_id
-      LEFT JOIN ratings rat ON u.id = rat.user_id
-      GROUP BY u.id, u.first_name, u.last_name, u.email, r.name, u.created_at
-      ORDER BY u.created_at DESC
-    `;
-
-    const result = await executeQuery(usersQuery);
-
-    sendSuccess(res, result.rows, "Users fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Get users error:", error);
-    sendError(res, "Failed to fetch users: " + error.message);
-  }
-});
-
-app.put("/api/users/:id/role", authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== 'Admin') {
-      return sendError(res, "Access denied. Admin only.", 403);
-    }
-
-    const { id } = req.params;
-    const { role } = req.body;
-
-    if (!role) {
-      return sendError(res, "Role is required", 400);
-    }
-
-    // Get role_id from role name
-    const roleRes = await executeQuery(
-      "SELECT id FROM roles WHERE name = $1",
-      [role]
-    );
-
-    if (!roleRes.rows.length) {
-      return sendError(res, "Invalid role specified", 400);
-    }
-
-    const role_id = roleRes.rows[0].id;
-
-    const result = await executeQuery(
-      "UPDATE users SET role_id = $1 WHERE id = $2 RETURNING *",
-      [role_id, id]
-    );
-
-    if (!result.rows.length) {
-      return sendError(res, "User not found", 404);
-    }
-
-    sendSuccess(res, result.rows[0], "User role updated successfully");
-
-  } catch (error) {
-    console.error("❌ Update user role error:", error);
-    sendError(res, "Failed to update user role: " + error.message);
-  }
-});
-
-// ========================
-// COURSE STATS ROUTE
-// ========================
-app.get("/api/reports/course-stats", authenticateToken, async (req, res) => {
-  try {
-    const courseStatsQuery = `
-      SELECT 
-        c.id,
-        c.name as course_name,
-        c.code as course_code,
-        COUNT(r.id) as report_count,
-        ROUND(AVG(r.actual_present::decimal / NULLIF(r.total_registered, 0)) * 100, 2) as avg_attendance,
-        c.total_registered,
-        COUNT(DISTINCT r.lecturer_id) as lecturers_count
-      FROM courses c
-      LEFT JOIN reports r ON c.id = r.course_id
-      GROUP BY c.id, c.name, c.code, c.total_registered
-      ORDER BY report_count DESC
-    `;
-
-    const result = await executeQuery(courseStatsQuery);
-
-    sendSuccess(res, result.rows, "Course statistics fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Course stats error:", error);
-    sendError(res, "Failed to fetch course statistics: " + error.message);
-  }
-});
-
-// ========================
-// WEEKLY TREND ROUTE
-// ========================
-app.get("/api/reports/weekly-trend", authenticateToken, async (req, res) => {
-  try {
-    const weeklyTrendQuery = `
-      SELECT 
-        week_of_reporting as week,
-        COUNT(id) as reports_count,
-        ROUND(AVG(actual_present::decimal / NULLIF(total_registered, 0)) * 100, 2) as avg_attendance,
-        COUNT(DISTINCT lecturer_id) as active_lecturers
-      FROM reports
-      WHERE week_of_reporting IS NOT NULL
-      GROUP BY week_of_reporting
-      ORDER BY week_of_reporting DESC
-      LIMIT 10
-    `;
-
-    const result = await executeQuery(weeklyTrendQuery);
-
-    sendSuccess(res, result.rows, "Weekly trends fetched successfully");
-
-  } catch (error) {
-    console.error("❌ Weekly trend error:", error);
-    sendError(res, "Failed to fetch weekly trends: " + error.message);
-  }
-});
-
-// ========================
-// LECTURERS ROUTES
-// ========================
-app.get("/api/lecturers", authenticateToken, async (req, res) => {
-  try {
-    const rows = await executeQuery(
-      `SELECT u.id, u.first_name, u.last_name, u.email,
-              COUNT(DISTINCT r.id) as total_ratings,
-              COALESCE(AVG(rat.rating), 0) as average_rating
-       FROM users u
-       JOIN roles r ON u.role_id = r.id
-       LEFT JOIN ratings rat ON u.id = rat.lecturer_id
-       WHERE r.name = 'Lecturer'
-       GROUP BY u.id, u.first_name, u.last_name, u.email
-       ORDER BY u.first_name, u.last_name`
-    );
-
-    sendSuccess(res, rows.rows, "Lecturers fetched successfully");
-  } catch (error) {
-    console.error("❌ Fetch Lecturers Error:", error);
-    sendError(res, "Failed to fetch lecturers");
-  }
-});
-
-// ========================
-// ENHANCED RATINGS ROUTES
-// ========================
-app.get("/api/ratings/my-ratings", authenticateToken, async (req, res) => {
-  try {
-    const rows = await executeQuery(
-      `SELECT r.*, 
-              c.name as course_name, c.code as course_code,
-              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
-              CASE 
-                WHEN r.lecturer_id IS NOT NULL THEN 'lecturer'
-                WHEN r.course_id IS NOT NULL THEN 'course'
-              END as rating_type
-       FROM ratings r
-       LEFT JOIN courses c ON r.course_id = c.id
-       LEFT JOIN users u ON r.lecturer_id = u.id
-       WHERE r.user_id = $1
-       ORDER BY r.created_at DESC`,
-      [req.user.id]
-    );
-
-    sendSuccess(res, rows.rows, "Your ratings fetched successfully");
-  } catch (error) {
-    console.error("❌ Fetch My Ratings Error:", error);
-    sendError(res, "Failed to fetch your ratings");
-  }
-});
-
-app.get("/api/ratings/lecturer", authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== "Lecturer") {
-      return sendError(res, "Only lecturers can access this endpoint", 403);
-    }
-
-    const rows = await executeQuery(
-      `SELECT r.*, 
-              c.name as course_name, c.code as course_code,
-              CONCAT(u.first_name, ' ', u.last_name) as student_name,
-              u.email as student_email
-       FROM ratings r
-       LEFT JOIN courses c ON r.course_id = c.id
-       JOIN users u ON r.user_id = u.id
-       WHERE r.lecturer_id = $1
-       ORDER BY r.created_at DESC`,
-      [req.user.id]
-    );
-
-    sendSuccess(res, rows.rows, "Lecturer ratings fetched successfully");
-  } catch (error) {
-    console.error("❌ Fetch Lecturer Ratings Error:", error);
-    sendError(res, "Failed to fetch ratings");
-  }
-});
-
-app.post("/api/ratings", authenticateToken, async (req, res) => {
-  try {
-    const { lecturer_id, course_id, rating, comment } = req.body;
-
-    if (!rating) {
-      return sendError(res, "Rating is required", 400);
-    }
-
-    if (rating < 1 || rating > 5) {
-      return sendError(res, "Rating must be between 1 and 5", 400);
-    }
-
-    // Validate that either lecturer_id or course_id is provided, but not both
-    if ((!lecturer_id && !course_id) || (lecturer_id && course_id)) {
-      return sendError(res, "Please rate either a lecturer or a course, but not both", 400);
-    }
-
-    // Check if user already rated this lecturer
-    if (lecturer_id) {
-      const existing = await executeQuery(
-        "SELECT id FROM ratings WHERE user_id = $1 AND lecturer_id = $2",
-        [req.user.id, lecturer_id]
-      );
-
-      if (existing.rows.length > 0) {
-        return sendError(res, "You have already rated this lecturer", 400);
-      }
-    }
-
-    // Check if user already rated this course
-    if (course_id) {
-      const existing = await executeQuery(
-        "SELECT id FROM ratings WHERE user_id = $1 AND course_id = $2",
-        [req.user.id, course_id]
-      );
-
-      if (existing.rows.length > 0) {
-        return sendError(res, "You have already rated this course", 400);
-      }
-    }
-
-    const result = await executeQuery(
-      "INSERT INTO ratings (user_id, lecturer_id, course_id, rating, comment) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-      [req.user.id, lecturer_id || null, course_id || null, rating, comment || null]
-    );
-
-    sendCreated(res, result.rows[0], "Rating submitted successfully");
-  } catch (error) {
-    console.error("❌ Submit Rating Error:", error);
-    if (error.code === '23505') {
-      return sendError(res, "You have already submitted this rating", 400);
-    }
-    sendError(res, "Failed to submit rating");
-  }
-});
-
-// ========================
-// ENHANCED SEARCH ROUTE
-// ========================
-app.get("/api/search", authenticateToken, async (req, res) => {
-  try {
-    const { q } = req.query;
-    if (!q) return sendSuccess(res, { courses: [], reports: [], lecturers: [], users: [] });
-
-    const searchTerm = `%${q}%`;
-
-    // Search courses
-    const coursesRes = await executeQuery(
-      `SELECT c.id, c.code as course_code, c.name as course_name, 
-              c.total_registered, f.name as faculty_name
-       FROM courses c
-       JOIN faculties f ON c.faculty_id = f.id
-       WHERE (c.name ILIKE $1 OR c.code ILIKE $1)
-       ORDER BY c.name
-       LIMIT 10`,
-      [searchTerm]
-    );
-
-    // Search reports
-    const reportsRes = await executeQuery(
-      `SELECT r.*, c.name as course_name, c.code as course_code,
-              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name
-       FROM reports r
-       JOIN courses c ON r.course_id = c.id
-       JOIN users u ON r.lecturer_id = u.id
-       WHERE c.name ILIKE $1 OR c.code ILIKE $1 OR r.topic ILIKE $1 OR r.class_name ILIKE $1
-       ORDER BY r.created_at DESC
-       LIMIT 10`,
-      [searchTerm]
-    );
-
-    // Search lecturers
-    const lecturersRes = await executeQuery(
-      `SELECT u.id, u.first_name, u.last_name, u.email
-       FROM users u
-       JOIN roles r ON u.role_id = r.id
-       WHERE r.name = 'Lecturer' 
-         AND (u.first_name ILIKE $1 OR u.last_name ILIKE $1 OR u.email ILIKE $1)
-       ORDER BY u.first_name, u.last_name
-       LIMIT 10`,
-      [searchTerm]
-    );
-
-    // Search users (only for admin/PRL/PL)
-    let usersRes = { rows: [] };
-    if (["Admin", "PRL", "PL"].includes(req.user.role)) {
-      usersRes = await executeQuery(
-        `SELECT u.id, u.first_name, u.last_name, u.email, r.name as role
-         FROM users u
-         JOIN roles r ON u.role_id = r.id
-         WHERE u.first_name ILIKE $1 OR u.last_name ILIKE $1 OR u.email ILIKE $1
-         ORDER BY u.first_name, u.last_name
-         LIMIT 10`,
-        [searchTerm]
-      );
-    }
-
-    sendSuccess(res, {
-      courses: coursesRes.rows,
-      reports: reportsRes.rows,
-      lecturers: lecturersRes.rows,
-      users: usersRes.rows
-    }, "Search completed successfully");
-
-  } catch (error) {
-    console.error("❌ Search Error:", error);
-    sendError(res, "Search failed: " + error.message);
-  }
-});
-
-// -----------------
 // HEALTH & ROOT
-// -----------------
+// ========================
 app.get("/api/health", async (req, res) => {
   try {
     await executeQuery('SELECT 1');
