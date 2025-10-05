@@ -61,13 +61,38 @@ testDatabaseConnection().then(success => {
   }
 });
 
-// Middleware
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+// ========================
+// UPDATED CORS CONFIGURATION
+// ========================
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://frontend-cbjcz3iqp-thomonyaneneo-gmailcoms-projects.vercel.app',
+  'https://frontend-git-main-thomonyaneneo-gmailcoms-projects.vercel.app',
+  'https://frontend-thomonyaneneo-gmailcoms-projects.vercel.app',
+  'https://luct-reporting-app.vercel.app' // Add your main Vercel domain
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      console.log('✅ CORS allowed for origin:', origin);
+      callback(null, true);
+    } else {
+      console.log('❌ CORS blocked for origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-}));
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+  optionsSuccessStatus: 200
+};
+
+// Middleware
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(morgan("dev"));
@@ -82,6 +107,9 @@ const limiter = rateLimit({
   message: { success: false, error: "Too many requests, please try again later." },
 });
 app.use("/api/", limiter);
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 
 // ---------- Helpers ----------
 function sendResponse(res, data = null, message = "Success", statusCode = 200) {
@@ -148,7 +176,7 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// ---------- UPDATED Validation middlewares ----------
+// ---------- Validation middlewares ----------
 function validateRegister(req, res, next) {
   const { email, password, role } = req.body;
   if (!email || !password || !role) return sendError(res, "Email, password, and role are required", 400);
@@ -159,11 +187,9 @@ function validateRegister(req, res, next) {
   next();
 }
 
-// UPDATED: Improved week validation that handles both numbers and "week X" format
 function validateReport(req, res, next) {
   const { class_name, week_of_reporting, lecture_date, course_id, actual_present } = req.body;
   
-  // Updated to require class_name instead of class_id
   if (!class_name || !week_of_reporting || !lecture_date || !course_id || actual_present === undefined) {
     return sendError(res, "All required fields must be filled", 400);
   }
@@ -174,21 +200,18 @@ function validateReport(req, res, next) {
     return sendError(res, "Class name must be in format: ProgramCodeYear-Group (e.g., BSCSEM1-A, BSCITY2-B)", 400);
   }
   
-  // IMPROVED: Better week validation that handles both numbers and "week X" format
+  // Improved week validation
   let weekNumber = week_of_reporting;
   
-  // If it's a string, try to extract number from "week X" format
   if (typeof week_of_reporting === 'string') {
     const weekMatch = week_of_reporting.match(/\d+/);
     if (weekMatch) {
       weekNumber = parseInt(weekMatch[0]);
     } else {
-      // Try to parse as number directly
       weekNumber = parseInt(week_of_reporting);
     }
   }
   
-  // Final validation
   if (isNaN(weekNumber) || Number(weekNumber) < 1 || Number(weekNumber) > 52) {
     return sendError(res, "Week must be a number between 1 and 52", 400);
   }
@@ -197,13 +220,12 @@ function validateReport(req, res, next) {
   
   const lectureDate = new Date(lecture_date);
   const today = new Date();
-  today.setHours(0, 0, 0, 0); // Reset time part for accurate date comparison
+  today.setHours(0, 0, 0, 0);
   
   if (lectureDate > today) {
     return sendError(res, "Lecture date cannot be in the future", 400);
   }
   
-  // Store cleaned week number for later use
   req.body.week_of_reporting = Number(weekNumber);
   next();
 }
@@ -219,7 +241,8 @@ app.get("/api/test", async (req, res) => {
       message: "Backend is working",
       database: "Connected",
       currentTime: result.rows[0].current_time,
-      databaseStatus: isDatabaseConnected ? "Connected" : "Disconnected"
+      databaseStatus: isDatabaseConnected ? "Connected" : "Disconnected",
+      cors: "Enabled for Vercel deployment"
     });
   } catch (error) {
     res.json({
@@ -324,7 +347,6 @@ app.post("/api/auth/login", async (req, res) => {
 
     console.log('🔐 Login attempt for:', email);
 
-    // REMOVED is_active check
     const users = await executeQuery(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.password_hash, r.name AS role
        FROM users u 
@@ -377,7 +399,6 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/auth/me", authenticateToken, async (req, res) => {
   try {
-    // REMOVED is_active check
     const users = await executeQuery(
       `SELECT u.id, u.email, u.first_name, u.last_name, r.name AS role
        FROM users u 
@@ -468,7 +489,7 @@ app.get("/api/my-classes", authenticateToken, async (req, res) => {
 });
 
 // -----------------
-// UPDATED REPORTS ROUTES - Now using ONLY class_name (class_id removed)
+// REPORTS ROUTES
 // -----------------
 app.get("/api/reports", authenticateToken, async (req, res) => {
   try {
@@ -485,14 +506,12 @@ app.get("/api/reports", authenticateToken, async (req, res) => {
       LEFT JOIN users fb ON r.feedback_by = fb.id
     `;
 
-    // If user is a lecturer, only show their reports
     if (req.user.role === 'Lecturer') {
       query += ` WHERE r.lecturer_id = $1 ORDER BY r.created_at DESC LIMIT 50`;
       const rows = await executeQuery(query, [req.user.id]);
       return sendSuccess(res, rows.rows, "Reports fetched successfully");
     }
 
-    // For other roles, show all reports
     query += ` ORDER BY r.created_at DESC LIMIT 50`;
     const rows = await executeQuery(query);
     sendSuccess(res, rows.rows, "Reports fetched successfully");
@@ -539,7 +558,6 @@ app.get("/api/reports/stats", authenticateToken, async (req, res) => {
   }
 });
 
-// UPDATED: Report creation - class_id completely removed
 app.post("/api/reports", authenticateToken, validateReport, async (req, res) => {
   if (!isDatabaseConnected) {
     return sendError(res, "Database temporarily unavailable. Please try again later.", 503);
@@ -584,7 +602,7 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
        RETURNING id, class_name`,
       [
         faculty_id,
-        class_name.toUpperCase(), // Store the class name in uppercase
+        class_name.toUpperCase(),
         week_of_reporting,
         lecture_date,
         course_id,
@@ -617,8 +635,7 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
     await client.query('ROLLBACK');
     console.error("❌ Create report error:", error);
     
-    // Handle specific database errors
-    if (error.code === '42703') { // undefined column error
+    if (error.code === '42703') {
       return sendError(res, "Database schema error: " + error.message, 500);
     }
     
@@ -689,7 +706,6 @@ app.post("/api/courses", authenticateToken, async (req, res) => {
       return sendError(res, "All fields are required", 400);
     }
 
-    // Check if course code already exists
     const existingCourse = await executeQuery(
       "SELECT id FROM courses WHERE code = $1",
       [code]
@@ -720,7 +736,6 @@ app.put("/api/courses/:id", authenticateToken, async (req, res) => {
       return sendError(res, "All fields are required", 400);
     }
 
-    // Check if course code already exists (excluding current course)
     const existingCourse = await executeQuery(
       "SELECT id FROM courses WHERE code = $1 AND id != $2",
       [code, id]
@@ -750,7 +765,6 @@ app.delete("/api/courses/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if course has any reports
     const reportsCheck = await executeQuery(
       "SELECT id FROM reports WHERE course_id = $1 LIMIT 1",
       [id]
@@ -828,7 +842,6 @@ app.delete("/api/classes/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check if class has any reports
     const reportsCheck = await executeQuery(
       "SELECT id FROM reports WHERE class_id = $1 LIMIT 1",
       [id]
@@ -888,7 +901,8 @@ app.get("/api/health", async (req, res) => {
       uptime: process.uptime(),
       database: 'connected',
       databaseStatus: isDatabaseConnected,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      cors: 'Enabled for Vercel deployment'
     }, "API is healthy");
   } catch (error) {
     sendSuccess(res, { 
@@ -909,6 +923,7 @@ app.get("/", (req, res) => {
         <h1>LUCT Reports API</h1>
         <p>PostgreSQL backend is running</p>
         <p>Database Status: ${isDatabaseConnected ? '✅ Connected' : '❌ Disconnected'}</p>
+        <p>CORS: ✅ Enabled for Vercel deployment</p>
         <ul>
           <li><a href="/api/health">Health Check</a></li>
           <li><a href="/api/test">Test Endpoint</a></li>
@@ -927,8 +942,8 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Database: Render.com PostgreSQL`);
   console.log(`🔐 JWT Secret: ${process.env.JWT_SECRET ? 'Set' : 'Using fallback'}`);
-  console.log(`🌐 CORS Enabled for: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
-  console.log(`🔗 Test endpoint: http://localhost:${PORT}/api/test`);
+  console.log(`🌐 CORS Enabled for Vercel deployment`);
+  console.log(`🔗 Test endpoint: https://luct-7.onrender.com/api/test`);
   console.log(`📧 Pre-created accounts available (e.g., borotho@luct.ac.ls / password123)`);
 });
 

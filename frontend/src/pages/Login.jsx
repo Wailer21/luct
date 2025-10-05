@@ -131,26 +131,10 @@ export default function Login() {
                   Create Account
                 </Link>
               </div>
-
-              <div className="mt-4 p-3 bg-light rounded">
-                <h6 className="text-center mb-3">Demo Accounts</h6>
-                <div className="row">
-                  <div className="col-12">
-                    <small className="text-muted">
-                      <strong>Student:</strong> student@luct.ac.ls / password123
-                    </small>
-                  </div>
-                  <div className="col-12 mt-1">
-                    <small className="text-muted">
-                      <strong>Lecturer:</strong> borotho@luct.ac.ls / password123
-                    </small>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+            </div> {/* card-body */}
+          </div> {/* card */}
+        </div> {/* col */}
+      </div> {/* row */}
+    </div> /* container */
   );
 }
