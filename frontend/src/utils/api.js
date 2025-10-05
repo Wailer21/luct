@@ -101,12 +101,12 @@ export const apiCall = async (endpoint, options = {}, retries = 2) => {
 
     const response = await apiInstance(config);
     
-    // Handle backend response format
+    // Handle backend response format - your backend returns {success, message, data, timestamp}
     if (response.data && response.data.success === false) {
       throw new Error(response.data.message || "Request failed");
     }
     
-    return response.data;
+    return response.data; // This returns the full response object from your backend
   } catch (error) {
     console.error("❌ API Call failed:", {
       endpoint,
@@ -138,7 +138,7 @@ export const apiCall = async (endpoint, options = {}, retries = 2) => {
   }
 };
 
-// Enhanced API methods with better error handling and consistent response format
+// FIXED: Enhanced API methods with proper response handling
 export const api = {
   get: async (endpoint, params = {}) => {
     try {
@@ -146,9 +146,12 @@ export const api = {
         method: "GET",
         params 
       });
+      
+      // FIXED: Your backend returns {success, message, data, timestamp}
+      // So we return the response directly, not response.data
       return {
-        success: true,
-        data: response.data || response,
+        success: response.success !== false, // Handle both true and undefined as success
+        data: response.data || response, // Some endpoints might return data directly
         message: response.message || "Request successful"
       };
     } catch (error) {
@@ -167,8 +170,10 @@ export const api = {
         method: "POST", 
         data 
       });
+      
+      // FIXED: Your backend returns {success, message, data, timestamp}
       return {
-        success: true,
+        success: response.success !== false,
         data: response.data || response,
         message: response.message || "Created successfully"
       };
@@ -189,7 +194,7 @@ export const api = {
         data 
       });
       return {
-        success: true,
+        success: response.success !== false,
         data: response.data || response,
         message: response.message || "Updated successfully"
       };
@@ -209,7 +214,7 @@ export const api = {
         method: "DELETE" 
       });
       return {
-        success: true,
+        success: response.success !== false,
         data: response.data || response,
         message: response.message || "Deleted successfully"
       };
