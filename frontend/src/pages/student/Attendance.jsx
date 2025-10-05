@@ -1,297 +1,218 @@
-"use client"
+// ========================
+// RATING MANAGEMENT ROUTES
+// ========================
 
-import { useEffect, useState } from "react"
-import { useAuth } from "../../utils/auth"
-import { apiMethods, API_ENDPOINTS } from "../../utils/api"
+// Get all lecturers for rating
+app.get("/api/lecturers", authenticateToken, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      `SELECT u.id, u.first_name, u.last_name, u.email, r.name as role
+       FROM users u 
+       JOIN roles r ON u.role_id = r.id 
+       WHERE r.name = 'Lecturer'
+       ORDER BY u.first_name, u.last_name`
+    );
+    sendSuccess(res, rows.rows, "Lecturers fetched successfully");
+  } catch (error) {
+    console.error("❌ Lecturers error:", error);
+    sendError(res, "Failed to fetch lecturers: " + error.message);
+  }
+});
 
-export default function StudentAttendance() {
-  const { token, user } = useAuth()
-  const [attendanceData, setAttendanceData] = useState([])
-  const [courses, setCourses] = useState([])
-  const [selectedCourse, setSelectedCourse] = useState("")
-  const [selectedMonth, setSelectedMonth] = useState("")
-  const [loading, setLoading] = useState(true)
+// Create ratings table (run this SQL first)
+app.post("/api/migrate/ratings-table", authenticateToken, async (req, res) => {
+  if (req.user.role !== 'Admin') {
+    return sendError(res, "Admin access required", 403);
+  }
 
-  useEffect(() => {
-    if (!token) return
-    fetchAttendanceData()
-  }, [token, selectedCourse, selectedMonth])
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // Create ratings table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ratings (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        lecturer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        course_id INTEGER REFERENCES courses(id) ON DELETE SET NULL,
+        rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+        comment TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT chk_rating_target CHECK (
+          (lecturer_id IS NOT NULL AND course_id IS NULL) OR 
+          (course_id IS NOT NULL AND lecturer_id IS NULL)
+        )
+      )
+    `);
 
-  const fetchAttendanceData = async () => {
-    try {
-      const params = new URLSearchParams()
-      if (selectedCourse) params.append('course_id', selectedCourse)
-      if (selectedMonth) params.append('month', selectedMonth)
-      params.append('student_id', user?.id)
+    // Create index for better performance
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_ratings_user_id ON ratings(user_id);
+      CREATE INDEX IF NOT EXISTS idx_ratings_lecturer_id ON ratings(lecturer_id);
+      CREATE INDEX IF NOT EXISTS idx_ratings_course_id ON ratings(course_id);
+    `);
 
-      const res = await apiMethods.get(`${API_ENDPOINTS.REPORTS}?${params}`)
-      
-      if (res.success) {
-        setAttendanceData(res.data.reports || [])
-      }
-    } catch (err) {
-      console.error("Failed to fetch attendance data:", err)
-    } finally {
-      setLoading(false)
+    await client.query('COMMIT');
+    sendSuccess(res, null, "Ratings table created successfully");
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Migration error:", error);
+    sendError(res, "Migration failed: " + error.message);
+  } finally {
+    client.release();
+  }
+});
+
+// Submit a rating
+app.post("/api/ratings", authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    const { lecturer_id, course_id, rating, comment } = req.body;
+    
+    // Validate input
+    if (!rating || (rating < 1 || rating > 5)) {
+      await client.query('ROLLBACK');
+      return sendError(res, "Rating must be between 1 and 5", 400);
     }
-  }
-
-  const getCourseAttendanceStats = (courseId) => {
-    const courseReports = attendanceData.filter(report => 
-      !courseId || report.course_id === courseId
-    )
     
-    const totalClasses = courseReports.length
-    const attendedClasses = courseReports.filter(report => report.actual_present > 0).length
-    const attendanceRate = totalClasses > 0 ? (attendedClasses / totalClasses) * 100 : 0
-    
-    return {
-      totalClasses,
-      attendedClasses,
-      attendanceRate: Math.round(attendanceRate),
-      missedClasses: totalClasses - attendedClasses
+    if (!lecturer_id && !course_id) {
+      await client.query('ROLLBACK');
+      return sendError(res, "Must rate either a lecturer or a course", 400);
     }
-  }
-
-  const getMonthlyAttendance = () => {
-    const monthlyData = {}
     
-    attendanceData.forEach(report => {
-      const month = new Date(report.lecture_date).toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'long' 
-      })
-      
-      if (!monthlyData[month]) {
-        monthlyData[month] = { present: 0, total: 0 }
-      }
-      
-      monthlyData[month].total++
-      if (report.actual_present > 0) {
-        monthlyData[month].present++
-      }
-    })
-    
-    return monthlyData
+    if (lecturer_id && course_id) {
+      await client.query('ROLLBACK');
+      return sendError(res, "Cannot rate both lecturer and course in same rating", 400);
+    }
+
+    // Check if user already rated this lecturer/course
+    const existingRating = await client.query(
+      `SELECT id FROM ratings 
+       WHERE user_id = $1 AND 
+             (lecturer_id = $2 OR course_id = $3)`,
+      [req.user.id, lecturer_id, course_id]
+    );
+
+    if (existingRating.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return sendError(res, "You have already rated this " + (lecturer_id ? "lecturer" : "course"), 400);
+    }
+
+    // Insert rating
+    const result = await client.query(
+      `INSERT INTO ratings (user_id, lecturer_id, course_id, rating, comment) 
+       VALUES ($1, $2, $3, $4, $5) 
+       RETURNING *`,
+      [req.user.id, lecturer_id, course_id, rating, comment || null]
+    );
+
+    await client.query('COMMIT');
+    sendCreated(res, result.rows[0], "Rating submitted successfully");
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Create rating error:", error);
+    sendError(res, "Failed to submit rating: " + error.message);
+  } finally {
+    client.release();
   }
+});
 
-  if (loading) {
-    return (
-      <div className="d-flex justify-content-center py-5">
-        <div className="spinner-border text-primary" role="status">
-          <span className="visually-hidden">Loading attendance data...</span>
-        </div>
-      </div>
-    )
+// Get my ratings
+app.get("/api/ratings/my-ratings", authenticateToken, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      `SELECT r.*, 
+              lect.first_name as lecturer_first_name, 
+              lect.last_name as lecturer_last_name,
+              c.code as course_code, 
+              c.name as course_name,
+              CASE 
+                WHEN r.lecturer_id IS NOT NULL THEN 'lecturer'
+                WHEN r.course_id IS NOT NULL THEN 'course'
+              END as rating_type
+       FROM ratings r
+       LEFT JOIN users lect ON r.lecturer_id = lect.id
+       LEFT JOIN courses c ON r.course_id = c.id
+       WHERE r.user_id = $1
+       ORDER BY r.created_at DESC`,
+      [req.user.id]
+    );
+    sendSuccess(res, rows.rows, "Ratings fetched successfully");
+  } catch (error) {
+    console.error("❌ Get ratings error:", error);
+    sendError(res, "Failed to fetch ratings: " + error.message);
   }
+});
 
-  const overallStats = getCourseAttendanceStats()
-  const monthlyAttendance = getMonthlyAttendance()
+// Get lecturer ratings (for lecturers to see their ratings)
+app.get("/api/ratings/lecturer", authenticateToken, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      `SELECT r.*, 
+              u.first_name as user_first_name, 
+              u.last_name as user_last_name,
+              c.code as course_code,
+              c.name as course_name
+       FROM ratings r
+       JOIN users u ON r.user_id = u.id
+       LEFT JOIN courses c ON r.course_id = c.id
+       WHERE r.lecturer_id = $1
+       ORDER BY r.created_at DESC`,
+      [req.user.id]
+    );
+    sendSuccess(res, rows.rows, "Lecturer ratings fetched successfully");
+  } catch (error) {
+    console.error("❌ Get lecturer ratings error:", error);
+    sendError(res, "Failed to fetch lecturer ratings: " + error.message);
+  }
+});
 
-  return (
-    <div className="container-fluid py-4">
-      <div className="row mb-4">
-        <div className="col-12">
-          <div className="d-flex justify-content-between align-items-center flex-wrap gap-3">
-            <div>
-              <h4 className="text-primary mb-1">My Attendance Details</h4>
-              <p className="text-muted mb-0">Detailed view of your class attendance records</p>
-            </div>
-            <div className="d-flex gap-2 flex-wrap">
-              <select
-                className="form-select"
-                style={{ minWidth: "180px" }}
-                value={selectedCourse}
-                onChange={(e) => setSelectedCourse(e.target.value)}
-              >
-                <option value="">All Courses</option>
-                {courses.map(course => (
-                  <option key={course.id} value={course.id}>
-                    {course.course_name}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="form-select"
-                style={{ minWidth: "150px" }}
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-              >
-                <option value="">All Months</option>
-                {Object.keys(monthlyAttendance).map(month => (
-                  <option key={month} value={month}>{month}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
+// Get course average ratings
+app.get("/api/ratings/course-stats", authenticateToken, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      `SELECT 
+         course_id,
+         c.code as course_code,
+         c.name as course_name,
+         COUNT(*) as total_ratings,
+         ROUND(AVG(rating)::numeric, 2) as average_rating
+       FROM ratings r
+       JOIN courses c ON r.course_id = c.id
+       WHERE course_id IS NOT NULL
+       GROUP BY course_id, c.code, c.name
+       ORDER BY average_rating DESC`
+    );
+    sendSuccess(res, rows.rows, "Course rating stats fetched successfully");
+  } catch (error) {
+    console.error("❌ Course stats error:", error);
+    sendError(res, "Failed to fetch course stats: " + error.message);
+  }
+});
 
-      {/* Overall Stats */}
-      <div className="row mb-4">
-        <div className="col-md-3 mb-3">
-          <div className="card text-center">
-            <div className="card-body">
-              <h3 className="text-primary">{overallStats.attendanceRate}%</h3>
-              <p className="text-muted mb-0">Overall Attendance</p>
-            </div>
-          </div>
-        </div>
-        <div className="col-md-3 mb-3">
-          <div className="card text-center">
-            <div className="card-body">
-              <h3 className="text-success">{overallStats.attendedClasses}</h3>
-              <p className="text-muted mb-0">Classes Attended</p>
-            </div>
-          </div>
-        </div>
-        <div className="col-md-3 mb-3">
-          <div className="card text-center">
-            <div className="card-body">
-              <h3 className="text-danger">{overallStats.missedClasses}</h3>
-              <p className="text-muted mb-0">Classes Missed</p>
-            </div>
-          </div>
-        </div>
-        <div className="col-md-3 mb-3">
-          <div className="card text-center">
-            <div className="card-body">
-              <h3 className="text-info">{overallStats.totalClasses}</h3>
-              <p className="text-muted mb-0">Total Classes</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Monthly Breakdown */}
-      <div className="row mb-4">
-        <div className="col-12">
-          <div className="card shadow">
-            <div className="card-header bg-white">
-              <h6 className="mb-0 text-primary">Monthly Attendance Breakdown</h6>
-            </div>
-            <div className="card-body">
-              {Object.keys(monthlyAttendance).length === 0 ? (
-                <div className="text-center py-4">
-                  <i className="fas fa-calendar-alt fa-2x text-muted mb-3"></i>
-                  <p className="text-muted mb-0">No attendance data available</p>
-                </div>
-              ) : (
-                <div className="table-responsive">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Month</th>
-                        <th>Classes Held</th>
-                        <th>Classes Attended</th>
-                        <th>Attendance Rate</th>
-                        <th>Performance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(monthlyAttendance).map(([month, data]) => {
-                        const rate = Math.round((data.present / data.total) * 100)
-                        const color = rate >= 80 ? "success" : rate >= 60 ? "warning" : "danger"
-                        
-                        return (
-                          <tr key={month}>
-                            <td><strong>{month}</strong></td>
-                            <td>{data.total}</td>
-                            <td>{data.present}</td>
-                            <td>
-                              <span className={`badge bg-${color}`}>{rate}%</span>
-                            </td>
-                            <td>
-                              <div className="progress" style={{ height: "8px", width: "120px" }}>
-                                <div
-                                  className={`progress-bar bg-${color}`}
-                                  style={{ width: `${rate}%` }}
-                                ></div>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Detailed Records */}
-      <div className="row">
-        <div className="col-12">
-          <div className="card shadow">
-            <div className="card-header bg-white">
-              <h6 className="mb-0 text-primary">Detailed Attendance Records</h6>
-            </div>
-            <div className="card-body">
-              {attendanceData.length === 0 ? (
-                <div className="text-center py-4">
-                  <i className="fas fa-clipboard-list fa-2x text-muted mb-3"></i>
-                  <p className="text-muted mb-0">No attendance records found</p>
-                </div>
-              ) : (
-                <div className="table-responsive">
-                  <table className="table table-hover">
-                    <thead className="table-light">
-                      <tr>
-                        <th>Date</th>
-                        <th>Course</th>
-                        <th>Lecturer</th>
-                        <th>Topic</th>
-                        <th>Time</th>
-                        <th>Status</th>
-                        <th>Week</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {attendanceData.map((report) => (
-                        <tr key={report.id}>
-                          <td>{new Date(report.lecture_date).toLocaleDateString()}</td>
-                          <td>
-                            <strong>{report.course_name}</strong>
-                            <br />
-                            <small className="text-muted">{report.course_code}</small>
-                          </td>
-                          <td>{report.lecturer_name}</td>
-                          <td>
-                            <small>{report.topic || "Not specified"}</small>
-                          </td>
-                          <td>
-                            <small>{report.scheduled_time}</small>
-                          </td>
-                          <td>
-                            {report.actual_present > 0 ? (
-                              <span className="badge bg-success">
-                                <i className="fas fa-check me-1"></i>
-                                Present
-                              </span>
-                            ) : (
-                              <span className="badge bg-danger">
-                                <i className="fas fa-times me-1"></i>
-                                Absent
-                              </span>
-                            )}
-                          </td>
-                          <td>
-                            <span className="badge bg-secondary">
-                              Week {report.week_of_reporting}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
+// Get lecturer average ratings
+app.get("/api/ratings/lecturer-stats", authenticateToken, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      `SELECT 
+         lecturer_id,
+         u.first_name,
+         u.last_name,
+         COUNT(*) as total_ratings,
+         ROUND(AVG(rating)::numeric, 2) as average_rating
+       FROM ratings r
+       JOIN users u ON r.lecturer_id = u.id
+       WHERE lecturer_id IS NOT NULL
+       GROUP BY lecturer_id, u.first_name, u.last_name
+       ORDER BY average_rating DESC`
+    );
+    sendSuccess(res, rows.rows, "Lecturer rating stats fetched successfully");
+  } catch (error) {
+    console.error("❌ Lecturer stats error:", error);
+    sendError(res, "Failed to fetch lecturer stats: " + error.message);
+  }
+});
