@@ -1,7 +1,7 @@
 import axios from "axios";
 
 // Base API URL
-const API_BASE_URL = process.env.REACT_APP_API_URL || "https://luct-5-o0v9.onrender.com";
+const API_BASE_URL = process.env.REACT_APP_API_URL || "https://luct-7.onrender.com";
 
 export const API_ENDPOINTS = {
   // Auth

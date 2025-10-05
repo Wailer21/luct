@@ -37,23 +37,44 @@ pool.on('error', (err, client) => {
   isDatabaseConnected = false;
 });
 
-// Test database connection on startup
-async function testDatabaseConnection() {
+// Test database connection on startup and run migrations
+async function initializeDatabase() {
   try {
     const client = await pool.connect();
     const result = await client.query('SELECT NOW() as current_time');
     console.log('✅ Database connected successfully');
+    
+    // Run schema migration to ensure class_name column exists
+    console.log('🔄 Checking database schema...');
+    
+    // Check if class_name column exists in reports table
+    const schemaCheck = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'reports' AND column_name = 'class_name'
+    `);
+    
+    if (schemaCheck.rows.length === 0) {
+      console.log('🔄 Adding class_name column to reports table...');
+      await client.query(`
+        ALTER TABLE reports ADD COLUMN class_name VARCHAR(255)
+      `);
+      console.log('✅ Added class_name column to reports table');
+    } else {
+      console.log('✅ class_name column already exists in reports table');
+    }
+    
     client.release();
     isDatabaseConnected = true;
     return true;
   } catch (error) {
-    console.error('❌ Database connection test failed:', error.message);
+    console.error('❌ Database initialization failed:', error.message);
     isDatabaseConnected = false;
     return false;
   }
 }
 
-testDatabaseConnection().then(success => {
+initializeDatabase().then(success => {
   if (success) {
     console.log('🎉 Database ready for requests');
   } else {
@@ -468,7 +489,7 @@ app.get("/api/my-classes", authenticateToken, async (req, res) => {
 });
 
 // -----------------
-// UPDATED REPORTS ROUTES - Now using class_name
+// UPDATED REPORTS ROUTES - Now using ONLY class_name (class_id removed)
 // -----------------
 app.get("/api/reports", authenticateToken, async (req, res) => {
   try {
@@ -539,7 +560,7 @@ app.get("/api/reports/stats", authenticateToken, async (req, res) => {
   }
 });
 
-// UPDATED: Report creation to handle class names
+// FIXED: Report creation - class_name column now exists
 app.post("/api/reports", authenticateToken, validateReport, async (req, res) => {
   if (!isDatabaseConnected) {
     return sendError(res, "Database temporarily unavailable. Please try again later.", 503);
@@ -552,7 +573,7 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
     
     const {
       faculty_id,
-      class_name, // Now using class_name instead of class_id
+      class_name,
       week_of_reporting,
       lecture_date,
       course_id,
@@ -575,31 +596,16 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
     }
     const course_code = courseRes.rows[0].code;
 
-    // Check if class exists, if not we'll still create the report but log it
-    const classRes = await client.query(
-      "SELECT id FROM classes WHERE class_name = $1", 
-      [class_name.toUpperCase()]
-    );
-
-    let class_id = null;
-    if (classRes.rows.length > 0) {
-      class_id = classRes.rows[0].id;
-      console.log('✅ Found existing class:', class_name, 'ID:', class_id);
-    } else {
-      console.log('⚠️ Class not found in database, but creating report anyway:', class_name);
-    }
-
     const insertRes = await client.query(
       `INSERT INTO reports (
-        faculty_id, class_id, class_name, week_of_reporting, lecture_date,
+        faculty_id, class_name, week_of_reporting, lecture_date,
         course_id, course_code, lecturer_id, actual_present, total_registered, 
         venue, scheduled_time, topic, learning_outcomes, recommendations, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW()) 
-       RETURNING id`,
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()) 
+       RETURNING id, class_name`,
       [
         faculty_id,
-        class_id, // Can be null if class doesn't exist
-        class_name.toUpperCase(), // Store the class name in uppercase
+        class_name.toUpperCase(),
         week_of_reporting,
         lecture_date,
         course_id,
@@ -617,8 +623,16 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
 
     await client.query('COMMIT');
     
-    console.log('✅ Report created successfully by user:', req.user.id, 'for class:', class_name);
-    sendCreated(res, { id: insertRes.rows[0].id }, "Report created successfully");
+    console.log('✅ Report created successfully:', {
+      id: insertRes.rows[0].id,
+      class_name: insertRes.rows[0].class_name,
+      lecturer: req.user.id
+    });
+    
+    sendCreated(res, { 
+      id: insertRes.rows[0].id,
+      class_name: insertRes.rows[0].class_name
+    }, "Report created successfully");
 
   } catch (error) {
     await client.query('ROLLBACK');
