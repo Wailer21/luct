@@ -14,12 +14,34 @@ export const API_ENDPOINTS = {
   COURSES: `${API_BASE_URL}/api/courses`,
   CLASSES: `${API_BASE_URL}/api/classes`,
   MY_CLASSES: `${API_BASE_URL}/api/my-classes`,
+  LECTURERS: `${API_BASE_URL}/api/lecturers`,
 
   // Reports
   REPORTS: `${API_BASE_URL}/api/reports`,
   REPORTS_STATS: `${API_BASE_URL}/api/reports/stats`,
   REPORTS_BY_ID: (id) => `${API_BASE_URL}/api/reports/${id}`,
   REPORTS_FEEDBACK: (id) => `${API_BASE_URL}/api/reports/${id}/feedback`,
+
+  // Ratings
+  RATINGS: `${API_BASE_URL}/api/ratings`,
+  RATINGS_MY: `${API_BASE_URL}/api/ratings/my-ratings`,
+  RATINGS_LECTURER: `${API_BASE_URL}/api/ratings/lecturer`,
+
+  // Search
+  SEARCH: `${API_BASE_URL}/api/search`,
+
+  // Student
+  STUDENT_ATTENDANCE: `${API_BASE_URL}/api/students/attendance`,
+  STUDENT_STATS: `${API_BASE_URL}/api/students/stats`,
+  STUDENT_PERFORMANCE: `${API_BASE_URL}/api/students/performance`,
+
+  // Analytics
+  ANALYTICS_OVERVIEW: `${API_BASE_URL}/api/analytics/overview`,
+  ANALYTICS_TRENDS: `${API_BASE_URL}/api/analytics/trends`,
+
+  // User Management
+  USERS: `${API_BASE_URL}/api/users`,
+  USERS_UPDATE_ROLE: (id) => `${API_BASE_URL}/api/users/${id}/role`,
 
   // Health
   HEALTH: `${API_BASE_URL}/api/health`,
@@ -31,10 +53,10 @@ export const getAuthToken = () => {
   return localStorage.getItem("token");
 };
 
+// Enhanced API instance with interceptors
 const apiInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000, // ✅ CHANGED FROM 10000 to 30000ms
-  timeoutErrorMessage: "Request timeout - backend server is not responding",
+  timeout: 10000, // Reduced to 10 seconds for faster feedback
 });
 
 // Request interceptor to add auth token
@@ -49,11 +71,7 @@ apiInstance.interceptors.request.use(
     // Add timestamp for debugging
     config.metadata = { startTime: new Date() };
     
-    console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`, {
-      params: config.params,
-      timestamp: config.metadata.startTime.toISOString()
-    });
-    
+    console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
   (error) => {
@@ -70,8 +88,7 @@ apiInstance.interceptors.response.use(
     
     console.log(`✅ API Response: ${response.config.method?.toUpperCase()} ${response.config.url}`, {
       status: response.status,
-      duration: `${duration}ms`,
-      data: response.data
+      duration: `${duration}ms`
     });
     
     return response;
@@ -84,15 +101,13 @@ apiInstance.interceptors.response.use(
       status: error.response?.status,
       duration: `${duration}ms`,
       error: error.message,
-      code: error.code,
-      response: error.response?.data
+      code: error.code
     });
 
     if (error.response?.status === 401) {
       console.warn("🔐 Authentication failed - redirecting to login");
       localStorage.removeItem("token");
       localStorage.removeItem("user");
-      // Use setTimeout to avoid React state updates during render
       setTimeout(() => {
         window.location.href = "/login";
       }, 100);
@@ -103,7 +118,7 @@ apiInstance.interceptors.response.use(
 );
 
 // Enhanced API call wrapper with better error handling and retry logic
-export const apiCall = async (endpoint, options = {}, retries = 3) => {
+export const apiCall = async (endpoint, options = {}, retries = 2) => {
   const maxRetries = retries;
   
   try {
@@ -116,6 +131,12 @@ export const apiCall = async (endpoint, options = {}, retries = 3) => {
 
     const response = await apiInstance(config);
     
+    // Handle HTML error responses (when backend returns HTML instead of JSON)
+    const contentType = response.headers['content-type'];
+    if (contentType && contentType.includes('text/html')) {
+      throw new Error(`Server returned HTML error page (Status: ${response.status})`);
+    }
+    
     // Handle backend response format
     if (response.data && response.data.success === false) {
       const error = new Error(response.data.message || "Request failed");
@@ -127,6 +148,7 @@ export const apiCall = async (endpoint, options = {}, retries = 3) => {
   } catch (error) {
     const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout');
     const isNetworkError = error.message.includes('Network Error') || !error.response;
+    const isCorsError = error.message.includes('CORS') || error.message.includes('Access-Control');
     
     console.error(`❌ API Call failed: ${options.method?.toUpperCase() || 'GET'} ${endpoint}`, {
       error: error.message,
@@ -134,11 +156,12 @@ export const apiCall = async (endpoint, options = {}, retries = 3) => {
       status: error.response?.status,
       isTimeout,
       isNetworkError,
+      isCorsError,
       retriesLeft: retries
     });
 
-    // Retry logic for timeout and network errors
-    if ((isTimeout || isNetworkError) && retries > 0) {
+    // Retry logic for timeout and network errors (but not for 4xx errors)
+    if ((isTimeout || isNetworkError) && retries > 0 && !error.response?.status?.toString().startsWith('4')) {
       const delay = Math.pow(2, maxRetries - retries) * 1000; // Exponential backoff
       console.log(`⏳ Retrying in ${delay}ms... (${retries} retries left)`);
       
@@ -152,11 +175,23 @@ export const apiCall = async (endpoint, options = {}, retries = 3) => {
     }
     
     // Return a consistent error format
-    const errorMessage = isTimeout 
-      ? "Backend server is not responding. Please check if the server is running."
-      : isNetworkError
-      ? "Network connection failed. Please check your internet connection."
-      : error.response?.data?.message || error.message || "API request failed";
+    let errorMessage;
+    
+    if (isCorsError) {
+      errorMessage = "CORS error: Backend is not configured to accept requests from this origin. Please check backend CORS settings.";
+    } else if (isTimeout) {
+      errorMessage = "Backend server is not responding. Please check if the server is running.";
+    } else if (isNetworkError) {
+      errorMessage = "Network connection failed. Please check your internet connection.";
+    } else if (error.response?.status === 400) {
+      errorMessage = "Bad Request: Invalid data sent to server. Please check your input.";
+    } else if (error.response?.status === 404) {
+      errorMessage = "Endpoint not found. The requested resource does not exist.";
+    } else if (error.response?.status === 500) {
+      errorMessage = "Server error. Please try again later.";
+    } else {
+      errorMessage = error.response?.data?.message || error.message || "API request failed";
+    }
     
     throw {
       success: false,
@@ -165,7 +200,8 @@ export const apiCall = async (endpoint, options = {}, retries = 3) => {
       code: error.code,
       data: error.response?.data,
       isTimeout,
-      isNetworkError
+      isNetworkError,
+      isCorsError
     };
   }
 };
@@ -194,6 +230,7 @@ export const api = {
         code: error.code,
         isTimeout: error.isTimeout,
         isNetworkError: error.isNetworkError,
+        isCorsError: error.isCorsError,
         data: null
       };
     }
@@ -221,6 +258,7 @@ export const api = {
         code: error.code,
         isTimeout: error.isTimeout,
         isNetworkError: error.isNetworkError,
+        isCorsError: error.isCorsError,
         data: null
       };
     }
@@ -247,6 +285,7 @@ export const api = {
         code: error.code,
         isTimeout: error.isTimeout,
         isNetworkError: error.isNetworkError,
+        isCorsError: error.isCorsError,
         data: null
       };
     }
@@ -272,13 +311,14 @@ export const api = {
         code: error.code,
         isTimeout: error.isTimeout,
         isNetworkError: error.isNetworkError,
+        isCorsError: error.isCorsError,
         data: null
       };
     }
   },
 };
 
-// Only include endpoints that actually exist
+// Convenience methods for specific endpoints
 export const apiMethods = {
   // Auth
   login: (credentials) => api.post(API_ENDPOINTS.LOGIN, credentials),
@@ -290,6 +330,7 @@ export const apiMethods = {
   getCourses: () => api.get(API_ENDPOINTS.COURSES),
   getClasses: () => api.get(API_ENDPOINTS.CLASSES),
   getMyClasses: () => api.get(API_ENDPOINTS.MY_CLASSES),
+  getLecturers: () => api.get(API_ENDPOINTS.LECTURERS),
   
   // Reports
   getReports: (params = {}) => api.get(API_ENDPOINTS.REPORTS, params),
@@ -297,6 +338,27 @@ export const apiMethods = {
   getReportById: (id) => api.get(API_ENDPOINTS.REPORTS_BY_ID(id)),
   createReport: (data) => api.post(API_ENDPOINTS.REPORTS, data),
   submitFeedback: (id, feedback) => api.post(API_ENDPOINTS.REPORTS_FEEDBACK(id), { feedback }),
+  
+  // Ratings
+  getMyRatings: () => api.get(API_ENDPOINTS.RATINGS_MY),
+  getLecturerRatings: () => api.get(API_ENDPOINTS.RATINGS_LECTURER),
+  submitRating: (ratingData) => api.post(API_ENDPOINTS.RATINGS, ratingData),
+  
+  // Student Monitoring
+  getStudentAttendance: (params = {}) => api.get(API_ENDPOINTS.STUDENT_ATTENDANCE, params),
+  getStudentStats: (params = {}) => api.get(API_ENDPOINTS.STUDENT_STATS, params),
+  getStudentPerformance: () => api.get(API_ENDPOINTS.STUDENT_PERFORMANCE),
+  
+  // Analytics
+  getAnalyticsOverview: () => api.get(API_ENDPOINTS.ANALYTICS_OVERVIEW),
+  getAnalyticsTrends: () => api.get(API_ENDPOINTS.ANALYTICS_TRENDS),
+  
+  // User Management
+  getUsers: () => api.get(API_ENDPOINTS.USERS),
+  updateUserRole: (id, role) => api.put(API_ENDPOINTS.USERS_UPDATE_ROLE(id), { role }),
+  
+  // Search
+  search: (query) => api.get(API_ENDPOINTS.SEARCH, { q: query }),
   
   // System
   healthCheck: () => api.get(API_ENDPOINTS.HEALTH),
@@ -310,7 +372,6 @@ export const testBackendConnection = async () => {
   try {
     console.log('📡 Testing connection to:', API_BASE_URL);
     
-    // First, try a simple fetch to check if server is reachable
     const startTime = Date.now();
     const testResponse = await apiMethods.testConnection();
     const endTime = Date.now();
@@ -332,25 +393,16 @@ export const testBackendConnection = async () => {
       message: error.message,
       status: error.status,
       isTimeout: error.isTimeout,
-      isNetworkError: error.isNetworkError
+      isNetworkError: error.isNetworkError,
+      isCorsError: error.isCorsError
     });
-    
-    // Additional diagnostic: try to ping the base URL
-    try {
-      const pingResponse = await fetch(API_BASE_URL, { 
-        method: 'HEAD',
-        signal: AbortSignal.timeout(5000)
-      });
-      console.log('🌐 Server is reachable but API might be down. HTTP Status:', pingResponse.status);
-    } catch (pingError) {
-      console.error('💀 Server is completely unreachable:', pingError.message);
-    }
     
     return {
       connected: false,
       message: error.message,
       isTimeout: error.isTimeout,
       isNetworkError: error.isNetworkError,
+      isCorsError: error.isCorsError,
       status: error.status
     };
   } finally {
@@ -373,17 +425,17 @@ export const initializeApp = async () => {
   connectionStatus = result.connected ? 'connected' : 'disconnected';
   
   if (!result.connected) {
-    console.warn('⚠️ Application starting in offline mode. Some features may not work.');
+    console.warn('⚠️ Application starting in limited mode. Some features may not work.');
     
     // Show user-friendly warning
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && result.isCorsError) {
       setTimeout(() => {
         const alertDiv = document.createElement('div');
         alertDiv.className = 'alert alert-warning alert-dismissible fade show';
         alertDiv.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
         alertDiv.innerHTML = `
-          <strong>⚠️ Connection Issue</strong>
-          <p class="mb-1">Cannot connect to server: ${result.message}</p>
+          <strong>⚠️ CORS Configuration Issue</strong>
+          <p class="mb-1">Backend is not accepting requests from this origin. Please check backend CORS settings.</p>
           <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         `;
         document.body.appendChild(alertDiv);

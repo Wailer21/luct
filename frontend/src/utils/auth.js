@@ -1,4 +1,3 @@
-// utils/auth.jsx or wherever your AuthProvider is
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { apiMethods } from './api';
 
@@ -13,40 +12,33 @@ export function AuthProvider({ children }) {
   }, []);
 
   const checkAuth = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        setLoading(false);
-        return;
-      }
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setLoading(false);
+      return;
+    }
 
+    try {
       const response = await apiMethods.getProfile();
       if (response.success) {
-        setUser(response.data);
+        setUser(response.data.user);
       } else {
         localStorage.removeItem('token');
+        localStorage.removeItem('user');
       }
     } catch (error) {
       console.error('Auth check failed:', error);
       localStorage.removeItem('token');
+      localStorage.removeItem('user');
     } finally {
       setLoading(false);
     }
   };
 
-  const login = async (credentials) => {
-    try {
-      const response = await apiMethods.login(credentials);
-      if (response.success) {
-        localStorage.setItem('token', response.data.token);
-        setUser(response.data.user);
-        return { success: true };
-      } else {
-        return { success: false, message: response.message };
-      }
-    } catch (error) {
-      return { success: false, message: error.message };
-    }
+  const login = async (token, userData) => {
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(userData));
+    setUser(userData);
   };
 
   const logout = () => {
@@ -57,9 +49,10 @@ export function AuthProvider({ children }) {
 
   const value = {
     user,
+    loading,
+    isAuthenticated: !!user,
     login,
-    logout,
-    loading
+    logout
   };
 
   return (

@@ -37,44 +37,23 @@ pool.on('error', (err, client) => {
   isDatabaseConnected = false;
 });
 
-// Test database connection on startup and run migrations
-async function initializeDatabase() {
+// Test database connection on startup
+async function testDatabaseConnection() {
   try {
     const client = await pool.connect();
     const result = await client.query('SELECT NOW() as current_time');
     console.log('✅ Database connected successfully');
-    
-    // Run schema migration to ensure class_name column exists
-    console.log('🔄 Checking database schema...');
-    
-    // Check if class_name column exists in reports table
-    const schemaCheck = await client.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'reports' AND column_name = 'class_name'
-    `);
-    
-    if (schemaCheck.rows.length === 0) {
-      console.log('🔄 Adding class_name column to reports table...');
-      await client.query(`
-        ALTER TABLE reports ADD COLUMN class_name VARCHAR(255)
-      `);
-      console.log('✅ Added class_name column to reports table');
-    } else {
-      console.log('✅ class_name column already exists in reports table');
-    }
-    
     client.release();
     isDatabaseConnected = true;
     return true;
   } catch (error) {
-    console.error('❌ Database initialization failed:', error.message);
+    console.error('❌ Database connection test failed:', error.message);
     isDatabaseConnected = false;
     return false;
   }
 }
 
-initializeDatabase().then(success => {
+testDatabaseConnection().then(success => {
   if (success) {
     console.log('🎉 Database ready for requests');
   } else {
@@ -560,7 +539,7 @@ app.get("/api/reports/stats", authenticateToken, async (req, res) => {
   }
 });
 
-// FIXED: Report creation - class_name column now exists
+// UPDATED: Report creation - class_id completely removed
 app.post("/api/reports", authenticateToken, validateReport, async (req, res) => {
   if (!isDatabaseConnected) {
     return sendError(res, "Database temporarily unavailable. Please try again later.", 503);
@@ -605,7 +584,7 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
        RETURNING id, class_name`,
       [
         faculty_id,
-        class_name.toUpperCase(),
+        class_name.toUpperCase(), // Store the class name in uppercase
         week_of_reporting,
         lecture_date,
         course_id,
@@ -640,7 +619,7 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
     
     // Handle specific database errors
     if (error.code === '42703') { // undefined column error
-      return sendError(res, "Database schema needs update. Please add 'class_name' column to reports table.", 500);
+      return sendError(res, "Database schema error: " + error.message, 500);
     }
     
     sendError(res, "Failed to create report: " + error.message);
