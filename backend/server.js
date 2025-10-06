@@ -62,31 +62,41 @@ testDatabaseConnection().then(success => {
 });
 
 // ========================
-// UPDATED CORS CONFIGURATION
+// DYNAMIC CORS CONFIGURATION
 // ========================
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://frontend-cbjcz3iqp-thomonyaneneo-gmailcoms-projects.vercel.app',
-  'https://frontend-git-main-thomonyaneneo-gmailcoms-projects.vercel.app',
-  'https://frontend-thomonyaneneo-gmailcoms-projects.vercel.app',
   'https://luct-reporting-app.vercel.app'
 ];
 
+// Dynamic Vercel preview deployment handling
+const vercelRegex = /https:\/\/frontend-.*-thomonyaneneo-gmailcoms-projects\.vercel\.app/;
+const vercelMainRegex = /https:\/\/frontend-.*\.vercel\.app/;
+
 const corsOptions = {
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
+    // Check against allowed origins
     if (allowedOrigins.indexOf(origin) !== -1) {
       console.log('✅ CORS allowed for origin:', origin);
       callback(null, true);
-    } else {
+    } 
+    // Check against Vercel preview deployments
+    else if (vercelRegex.test(origin) || vercelMainRegex.test(origin)) {
+      console.log('✅ CORS allowed for Vercel deployment:', origin);
+      callback(null, true);
+    } 
+    // Block all other origins
+    else {
       console.log('❌ CORS blocked for origin:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
   optionsSuccessStatus: 200
 };
 
@@ -265,7 +275,7 @@ app.get("/api/test", async (req, res) => {
       database: "Connected",
       currentTime: result.rows[0].current_time,
       databaseStatus: isDatabaseConnected ? "Connected" : "Disconnected",
-      cors: "Enabled for Vercel deployment"
+      cors: "Dynamic CORS enabled for Vercel deployments"
     });
   } catch (error) {
     res.json({
@@ -822,10 +832,10 @@ app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => 
     return sendError(res, "Database temporarily unavailable. Please try again later.", 503);
   }
 
-  let client; // Define client outside the try...catch block
+  let client;
 
   try {
-    client = await pool.connect(); // Assign client inside the try block
+    client = await pool.connect();
     await client.query('BEGIN');
     
     const { lecturer_id, course_id, rating, comment, rating_type } = req.body;
@@ -872,19 +882,16 @@ app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => 
 
   } catch (error) {
     console.error("❌ Submit rating error:", error);
-    // Attempt to rollback only if the transaction started
     if (client) {
       await client.query('ROLLBACK').catch(rollbackError => console.error('❌ Rollback failed:', rollbackError));
     }
     sendError(res, "Failed to submit rating: " + error.message);
   } finally {
-    // Only release the client if it was successfully connected
     if (client) {
       client.release();
     }
   }
 });
-
 
 // Get lecturer rating statistics
 app.get("/api/ratings/lecturer/:id/stats", authenticateToken, async (req, res) => {
@@ -1375,14 +1382,12 @@ app.delete("/api/classes/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // First, get the class name before trying to delete it
     const classInfo = await executeQuery("SELECT class_name FROM classes WHERE id = $1", [id]);
     if (classInfo.rows.length === 0) {
       return sendError(res, "Class not found", 404);
     }
     const className = classInfo.rows[0].class_name;
 
-    // CORRECTED: Check reports using class_name, not a non-existent class_id
     const reportsCheck = await executeQuery(
       "SELECT id FROM reports WHERE class_name = $1 LIMIT 1",
       [className]
@@ -1397,7 +1402,6 @@ app.delete("/api/classes/:id", authenticateToken, async (req, res) => {
       [id]
     );
 
-    // This check is slightly redundant now but safe to keep
     if (!result.rows.length) {
       return sendError(res, "Class not found", 404);
     }
@@ -1444,7 +1448,7 @@ app.get("/api/health", async (req, res) => {
       database: 'connected',
       databaseStatus: isDatabaseConnected,
       timestamp: new Date().toISOString(),
-      cors: 'Enabled for Vercel deployment',
+      cors: 'Dynamic CORS enabled for Vercel deployments',
       modules: {
         auth: 'active',
         reports: 'active',
@@ -1476,7 +1480,7 @@ app.get("/", (req, res) => {
         <h1>LUCT Reports API</h1>
         <p>PostgreSQL backend is running</p>
         <p>Database Status: ${isDatabaseConnected ? '✅ Connected' : '❌ Disconnected'}</p>
-        <p>CORS: ✅ Enabled for Vercel deployment</p>
+        <p>CORS: ✅ Dynamic CORS enabled for Vercel deployments</p>
         <p>Modules: ✅ Reports, ✅ Ratings, ✅ Courses, ✅ Classes, ✅ Search, ✅ Analytics</p>
         <ul>
           <li><a href="/api/health">Health Check</a></li>
@@ -1496,7 +1500,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Database: Render.com PostgreSQL`);
   console.log(`🔐 JWT Secret: ${process.env.JWT_SECRET ? 'Set' : 'Using fallback'}`);
-  console.log(`🌐 CORS Enabled for Vercel deployment`);
+  console.log(`🌐 CORS: Dynamic CORS enabled for Vercel deployments`);
   console.log(`⭐ All Modules: Active`);
   console.log(`🔗 Test endpoint: https://luct-7.onrender.com/api/test`);
   console.log(`📧 Pre-created accounts available (e.g., borotho@luct.ac.ls / password123)`);
