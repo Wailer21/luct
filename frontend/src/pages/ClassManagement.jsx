@@ -28,15 +28,17 @@ export default function ClassManagement() {
 
   const fetchData = async () => {
     try {
+      setLoading(true);
+      // Use the correct API methods
       const [classesRes, coursesRes, lecturersRes] = await Promise.all([
-        apiMethods.get('/api/classes'),
-        apiMethods.get('/api/courses'),
-        apiMethods.get('/api/users/lecturers')
+        apiMethods.getClasses(),
+        apiMethods.getCourses(),
+        apiMethods.getLecturers() // Fixed: use getLecturers instead of get('/api/users/lecturers')
       ]);
 
-      if (classesRes.success) setClasses(classesRes.data);
-      if (coursesRes.success) setCourses(coursesRes.data);
-      if (lecturersRes.success) setLecturers(lecturersRes.data);
+      if (classesRes.success) setClasses(classesRes.data || []);
+      if (coursesRes.success) setCourses(coursesRes.data || []);
+      if (lecturersRes.success) setLecturers(lecturersRes.data || []);
     } catch (err) {
       setError('Failed to fetch data');
       console.error('Data fetch error:', err);
@@ -50,7 +52,8 @@ export default function ClassManagement() {
     setFormLoading(true);
 
     try {
-      const response = await apiMethods.post('/api/classes', formData);
+      // Use the correct API method for creating classes
+      const response = await apiMethods.createClass(formData);
       
       if (response.success) {
         setClasses([...classes, response.data]);
@@ -85,7 +88,8 @@ export default function ClassManagement() {
 
   const handleAssignLecturer = async (classId, lecturerId, className) => {
     try {
-      const response = await apiMethods.put(`/api/classes/${classId}/assign-lecturer`, {
+      // Use the correct API method for updating class
+      const response = await apiMethods.updateClass(classId, {
         lecturer_id: lecturerId
       });
       
@@ -109,7 +113,10 @@ export default function ClassManagement() {
     if (!window.confirm(`Remove lecturer from ${className}?`)) return;
 
     try {
-      const response = await apiMethods.put(`/api/classes/${classId}/remove-lecturer`);
+      // Remove lecturer by setting lecturer_id to null
+      const response = await apiMethods.updateClass(classId, {
+        lecturer_id: null
+      });
       
       if (response.success) {
         setClasses(classes.map(cls => 
@@ -131,7 +138,7 @@ export default function ClassManagement() {
     if (!window.confirm(`Delete ${className}?`)) return;
 
     try {
-      const response = await apiMethods.delete(`/api/classes/${classId}`);
+      const response = await apiMethods.deleteClass(classId);
       
       if (response.success) {
         setClasses(classes.filter(cls => cls.id !== classId));
@@ -148,33 +155,35 @@ export default function ClassManagement() {
 
   const handleExport = () => {
     const exportData = classes.map(classItem => ({
-      'Class Code': classItem.class_name,
+      'Class Code': classItem.class_name || classItem.code,
       'Course Code': classItem.course_code,
       'Course Name': classItem.course_name,
       'Faculty': classItem.faculty_name,
-      'Lecturer': classItem.lecturer_name || 'Not Assigned',
-      'Lecturer Email': classItem.lecturer_email || 'N/A',
+      'Lecturer': classItem.instructor_name || classItem.lecturer_name || 'Not Assigned',
       'Venue': classItem.venue || 'Not Specified',
-      'Schedule': classItem.scheduled_time || 'Not Scheduled'
+      'Schedule': classItem.scheduled_time || classItem.schedule || 'Not Scheduled'
     }));
 
     exportToExcel(exportData, 'class-codes', 'Class Codes');
   };
 
-  // Group classes by program for better organization
+  // Enhanced program detection
   const getProgramFromCode = (classCode) => {
-    if (classCode.startsWith('BSCITY')) return 'Information Technology';
-    if (classCode.startsWith('BSCSEM')) return 'Software Engineering & Multimedia';
-    if (classCode.startsWith('BSCBIT')) return 'Business Information Technology';
-    if (classCode.startsWith('BSCECOM')) return 'E-Commerce';
-    if (classCode.startsWith('BSCMC')) return 'Multimedia Computing';
-    if (classCode.startsWith('BSCIVC')) return 'Interactive Computing';
-    if (classCode.startsWith('BSCBIS')) return 'Business Information Systems';
-    return 'Other';
+    const code = classCode?.toUpperCase() || '';
+    if (code.startsWith('BSCITY')) return 'Information Technology';
+    if (code.startsWith('BSCSEM')) return 'Software Engineering & Multimedia';
+    if (code.startsWith('BSCBIT')) return 'Business Information Technology';
+    if (code.startsWith('BSCECOM')) return 'E-Commerce';
+    if (code.startsWith('BSCMC')) return 'Multimedia Computing';
+    if (code.startsWith('BSCIVC')) return 'Interactive Computing';
+    if (code.startsWith('BSCBIS')) return 'Business Information Systems';
+    if (code.startsWith('BSC')) return 'Bachelor of Science';
+    return 'Other Programs';
   };
 
   const groupedClasses = classes.reduce((acc, classItem) => {
-    const program = getProgramFromCode(classItem.class_name);
+    const className = classItem.class_name || classItem.code;
+    const program = getProgramFromCode(className);
     if (!acc[program]) {
       acc[program] = [];
     }
@@ -182,12 +191,12 @@ export default function ClassManagement() {
     return acc;
   }, {});
 
-  if (!['PL', 'Admin'].includes(user?.role)) {
+  if (!['PL', 'Admin', 'PRL'].includes(user?.role)) {
     return (
       <div className="container-fluid py-4">
         <div className="alert alert-danger">
           <i className="fas fa-exclamation-triangle me-2"></i>
-          Access denied. Class management requires PL or Admin role.
+          Access denied. Class management requires PL, PRL or Admin role.
         </div>
       </div>
     );
@@ -201,7 +210,7 @@ export default function ClassManagement() {
             <div>
               <h2 className="text-primary mb-1">
                 <i className="fas fa-graduation-cap me-2"></i>
-                Class Code Management
+                Class Management
               </h2>
               <p className="text-muted mb-0">Manage class codes and lecturer assignments</p>
             </div>
@@ -219,7 +228,15 @@ export default function ClassManagement() {
                 onClick={() => setShowForm(!showForm)}
               >
                 <i className="fas fa-plus me-2"></i>
-                Add Class Code
+                Add Class
+              </button>
+              <button
+                className="btn btn-outline-secondary"
+                onClick={fetchData}
+                disabled={loading}
+              >
+                <i className="fas fa-sync-alt me-2"></i>
+                Refresh
               </button>
             </div>
           </div>
@@ -243,7 +260,7 @@ export default function ClassManagement() {
               <div className="card-header bg-primary text-white">
                 <h5 className="mb-0">
                   <i className="fas fa-plus-circle me-2"></i>
-                  Add New Class Code
+                  Add New Class
                 </h5>
               </div>
               <div className="card-body">
@@ -309,7 +326,7 @@ export default function ClassManagement() {
                         name="scheduled_time"
                         value={formData.scheduled_time}
                         onChange={handleChange}
-                        placeholder="e.g., 08:00-10:00, 14:00-16:00"
+                        placeholder="e.g., Mon/Wed 10:00 AM, 14:00-16:00"
                         disabled={formLoading}
                       />
                     </div>
@@ -354,7 +371,7 @@ export default function ClassManagement() {
                           Creating...
                         </>
                       ) : (
-                        'Add Class Code'
+                        'Add Class'
                       )}
                     </button>
                   </div>
@@ -368,20 +385,20 @@ export default function ClassManagement() {
               {loading ? (
                 <div className="text-center py-5">
                   <div className="spinner-border text-primary"></div>
-                  <p className="mt-2">Loading class codes...</p>
+                  <p className="mt-2">Loading classes...</p>
                 </div>
               ) : classes.length === 0 ? (
                 <div className="text-center py-5">
                   <i className="fas fa-graduation-cap fa-3x text-muted mb-3"></i>
-                  <h5 className="text-muted">No class codes found</h5>
-                  <p className="text-muted">Get started by adding your first class code</p>
+                  <h5 className="text-muted">No classes found</h5>
+                  <p className="text-muted">Get started by adding your first class</p>
                 </div>
               ) : (
                 Object.entries(groupedClasses).map(([program, programClasses]) => (
                   <div key={program} className="mb-5">
                     <h5 className="text-primary mb-3 border-bottom pb-2">
                       <i className="fas fa-folder me-2"></i>
-                      {program}
+                      {program} ({programClasses.length} classes)
                     </h5>
                     <div className="table-responsive">
                       <table className="table table-hover">
@@ -400,7 +417,9 @@ export default function ClassManagement() {
                           {programClasses.map((classItem) => (
                             <tr key={classItem.id}>
                               <td>
-                                <strong className="text-primary">{classItem.class_name}</strong>
+                                <strong className="text-primary">
+                                  {classItem.class_name || classItem.code}
+                                </strong>
                               </td>
                               <td>
                                 <div>
@@ -411,25 +430,28 @@ export default function ClassManagement() {
                               </td>
                               <td>{classItem.faculty_name}</td>
                               <td>
-                                {classItem.lecturer_name ? (
+                                {classItem.instructor_name || classItem.lecturer_name ? (
                                   <div>
                                     <div className="d-flex align-items-center">
-                                      <strong>{classItem.lecturer_name}</strong>
+                                      <strong>{classItem.instructor_name || classItem.lecturer_name}</strong>
                                       <button
                                         className="btn btn-sm btn-outline-danger ms-2"
-                                        onClick={() => handleRemoveLecturer(classItem.id, classItem.class_name)}
+                                        onClick={() => handleRemoveLecturer(classItem.id, classItem.class_name || classItem.code)}
                                         title="Remove Lecturer"
                                       >
                                         <i className="fas fa-times"></i>
                                       </button>
                                     </div>
-                                    <small className="text-muted">{classItem.lecturer_email}</small>
                                   </div>
                                 ) : (
                                   <select
                                     className="form-select form-select-sm"
                                     value=""
-                                    onChange={(e) => handleAssignLecturer(classItem.id, e.target.value, classItem.class_name)}
+                                    onChange={(e) => handleAssignLecturer(
+                                      classItem.id, 
+                                      e.target.value, 
+                                      classItem.class_name || classItem.code
+                                    )}
                                   >
                                     <option value="">Assign Lecturer</option>
                                     {lecturers.map(lecturer => (
@@ -446,19 +468,35 @@ export default function ClassManagement() {
                                 )}
                               </td>
                               <td>
-                                {classItem.scheduled_time || (
+                                {classItem.scheduled_time || classItem.schedule || (
                                   <span className="text-muted">Not scheduled</span>
                                 )}
                               </td>
                               <td>
                                 <div className="btn-group">
-                                  <button className="btn btn-sm btn-outline-primary">
+                                  <button 
+                                    className="btn btn-sm btn-outline-primary"
+                                    onClick={() => {
+                                      // Edit functionality - you can implement this
+                                      setFormData({
+                                        class_name: classItem.class_name || classItem.code,
+                                        course_id: classItem.course_id,
+                                        venue: classItem.venue || '',
+                                        scheduled_time: classItem.scheduled_time || classItem.schedule || '',
+                                        lecturer_id: classItem.lecturer_id || ''
+                                      });
+                                      setShowForm(true);
+                                    }}
+                                  >
                                     <i className="fas fa-edit"></i>
                                   </button>
-                                  {!classItem.lecturer_name && (
+                                  {!classItem.instructor_name && !classItem.lecturer_name && (
                                     <button 
                                       className="btn btn-sm btn-outline-danger"
-                                      onClick={() => handleDeleteClass(classItem.id, classItem.class_name)}
+                                      onClick={() => handleDeleteClass(
+                                        classItem.id, 
+                                        classItem.class_name || classItem.code
+                                      )}
                                     >
                                       <i className="fas fa-trash"></i>
                                     </button>

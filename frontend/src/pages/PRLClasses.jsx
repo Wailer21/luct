@@ -12,14 +12,11 @@ export default function PRLClasses() {
   const [showForm, setShowForm] = useState(false);
   const [editingClass, setEditingClass] = useState(null);
   const [formData, setFormData] = useState({
-    code: '',
-    name: '',
-    description: '',
-    instructor_name: '',
-    schedule: '',
-    enrolled_students: 0,
-    sections: 1,
-    status: 'upcoming'
+    class_name: '',  // Changed from 'code'
+    course_id: '',   // Added course_id
+    venue: '',       // Added venue
+    scheduled_time: '', // Changed from 'schedule'
+    lecturer_id: ''  // Added lecturer_id
   });
 
   const { user } = useAuth();
@@ -33,7 +30,6 @@ export default function PRLClasses() {
       setLoading(true);
       setError(null);
       
-      // Use the getClasses method directly
       const response = await apiMethods.getClasses();
       
       if (response.success) {
@@ -61,7 +57,7 @@ export default function PRLClasses() {
     e.preventDefault();
     try {
       if (editingClass) {
-        // Update existing class
+        // Update existing class - use the correct endpoint structure
         const response = await apiMethods.updateClass(editingClass.id, formData);
         if (response.success) {
           setClasses(prev => prev.map(cls => 
@@ -72,11 +68,8 @@ export default function PRLClasses() {
           resetForm();
         }
       } else {
-        // Create new class
-        const response = await apiMethods.createClass({
-          ...formData,
-          program_id: user?.programId
-        });
+        // Create new class - use the correct endpoint structure
+        const response = await apiMethods.createClass(formData);
         if (response.success) {
           setClasses(prev => [...prev, response.data]);
           setShowForm(false);
@@ -91,28 +84,22 @@ export default function PRLClasses() {
 
   const resetForm = () => {
     setFormData({
-      code: '',
-      name: '',
-      description: '',
-      instructor_name: '',
-      schedule: '',
-      enrolled_students: 0,
-      sections: 1,
-      status: 'upcoming'
+      class_name: '',
+      course_id: '',
+      venue: '',
+      scheduled_time: '',
+      lecturer_id: ''
     });
     setEditingClass(null);
   };
 
   const handleEdit = (classItem) => {
     setFormData({
-      code: classItem.code,
-      name: classItem.name,
-      description: classItem.description || '',
-      instructor_name: classItem.instructor_name || '',
-      schedule: classItem.schedule || '',
-      enrolled_students: classItem.enrolled_students || 0,
-      sections: classItem.sections || 1,
-      status: classItem.status || 'upcoming'
+      class_name: classItem.class_name || classItem.code || '',
+      course_id: classItem.course_id || '',
+      venue: classItem.venue || '',
+      scheduled_time: classItem.scheduled_time || classItem.schedule || '',
+      lecturer_id: classItem.lecturer_id || ''
     });
     setEditingClass(classItem);
     setShowForm(true);
@@ -137,11 +124,29 @@ export default function PRLClasses() {
     setShowForm(true);
   };
 
+  // Helper function to get display values
+  const getDisplayValue = (classItem, field) => {
+    switch (field) {
+      case 'code':
+        return classItem.class_name || classItem.code || 'N/A';
+      case 'name':
+        return classItem.course_name || classItem.name || 'N/A';
+      case 'instructor':
+        return classItem.instructor_name || classItem.lecturer_name || 'TBA';
+      case 'schedule':
+        return classItem.scheduled_time || classItem.schedule || 'Not set';
+      case 'venue':
+        return classItem.venue || 'Not specified';
+      default:
+        return classItem[field] || 'N/A';
+    }
+  };
+
   // Quick Stats Calculation
   const totalClasses = classes.length;
   const activeClasses = classes.filter(c => c.status === 'active').length;
   const totalStudents = classes.reduce((sum, c) => sum + (c.enrolled_students || 0), 0);
-  const totalInstructors = new Set(classes.map(c => c.instructor_id).filter(Boolean)).size;
+  const totalInstructors = new Set(classes.map(c => c.lecturer_id).filter(Boolean)).size;
 
   const ClassGridView = () => (
     <div className="row">
@@ -149,17 +154,14 @@ export default function PRLClasses() {
         <div key={classItem.id} className="col-md-6 col-lg-4 mb-4">
           <div className="card h-100 shadow-sm">
             <div className="card-header bg-light d-flex justify-content-between align-items-center">
-              <strong className="text-primary">{classItem.code}</strong>
-              <span className={`badge ${
-                classItem.status === 'active' ? 'bg-success' : 
-                classItem.status === 'upcoming' ? 'bg-warning' : 'bg-secondary'
-              }`}>
-                {classItem.status || 'unknown'}
-              </span>
+              <strong className="text-primary">{getDisplayValue(classItem, 'code')}</strong>
+              <span className="badge bg-success">Active</span>
             </div>
             <div className="card-body">
-              <h6 className="card-title">{classItem.name}</h6>
-              <p className="card-text small text-muted">{classItem.description || 'No description available'}</p>
+              <h6 className="card-title">{getDisplayValue(classItem, 'name')}</h6>
+              <p className="card-text small text-muted">
+                {classItem.course_code ? `${classItem.course_code} - ${classItem.course_name}` : 'Course information'}
+              </p>
               
               <div className="class-info mt-3">
                 <div className="row text-center g-2">
@@ -181,12 +183,17 @@ export default function PRLClasses() {
               <div className="mt-3">
                 <small className="text-muted">
                   <i className="fas fa-user-tie me-1"></i>
-                  {classItem.instructor_name || 'TBA'}
+                  {getDisplayValue(classItem, 'instructor')}
                 </small>
                 <br />
                 <small className="text-muted">
                   <i className="fas fa-calendar me-1"></i>
-                  {classItem.schedule || 'Schedule not set'}
+                  {getDisplayValue(classItem, 'schedule')}
+                </small>
+                <br />
+                <small className="text-muted">
+                  <i className="fas fa-map-marker-alt me-1"></i>
+                  {getDisplayValue(classItem, 'venue')}
                 </small>
               </div>
             </div>
@@ -198,12 +205,6 @@ export default function PRLClasses() {
                   title="View Details"
                 >
                   <i className="fas fa-eye"></i>
-                </button>
-                <button className="btn btn-sm btn-outline-info" title="Analytics">
-                  <i className="fas fa-chart-bar"></i>
-                </button>
-                <button className="btn btn-sm btn-outline-success" title="Students">
-                  <i className="fas fa-users"></i>
                 </button>
                 <button 
                   className="btn btn-sm btn-outline-warning" 
@@ -233,12 +234,11 @@ export default function PRLClasses() {
         <thead className="table-light">
           <tr>
             <th>Class Code</th>
-            <th>Class Name</th>
+            <th>Course</th>
+            <th>Faculty</th>
             <th>Instructor</th>
-            <th>Students</th>
-            <th>Sections</th>
+            <th>Venue</th>
             <th>Schedule</th>
-            <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -246,26 +246,20 @@ export default function PRLClasses() {
           {classes.map(classItem => (
             <tr key={classItem.id}>
               <td>
-                <strong className="text-primary">{classItem.code}</strong>
-              </td>
-              <td>{classItem.name}</td>
-              <td>{classItem.instructor_name || 'TBA'}</td>
-              <td>
-                <span className="badge bg-info">{classItem.enrolled_students || 0}</span>
+                <strong className="text-primary">{getDisplayValue(classItem, 'code')}</strong>
               </td>
               <td>
-                <span className="badge bg-secondary">{classItem.sections || 1}</span>
+                <div>
+                  <strong>{classItem.course_code}</strong>
+                  <br />
+                  <small className="text-muted">{classItem.course_name}</small>
+                </div>
               </td>
+              <td>{classItem.faculty_name || 'N/A'}</td>
+              <td>{getDisplayValue(classItem, 'instructor')}</td>
+              <td>{getDisplayValue(classItem, 'venue')}</td>
               <td>
-                <small className="text-muted">{classItem.schedule || 'Not set'}</small>
-              </td>
-              <td>
-                <span className={`badge ${
-                  classItem.status === 'active' ? 'bg-success' : 
-                  classItem.status === 'upcoming' ? 'bg-warning' : 'bg-secondary'
-                }`}>
-                  {classItem.status || 'unknown'}
-                </span>
+                <small className="text-muted">{getDisplayValue(classItem, 'schedule')}</small>
               </td>
               <td>
                 <div className="btn-group">
@@ -327,69 +321,47 @@ export default function PRLClasses() {
                     <input
                       type="text"
                       className="form-control"
-                      name="code"
-                      value={formData.code}
+                      name="class_name"
+                      value={formData.class_name}
                       onChange={handleInputChange}
                       required
-                      placeholder="e.g., CS101"
+                      placeholder="e.g., BSCSEM1-A, BSCITY2-B"
                     />
+                    <div className="form-text">
+                      Format: ProgramCodeYear-Group (e.g., BSCSEM1-A, BSCITY2-B)
+                    </div>
                   </div>
                 </div>
                 <div className="col-md-6">
                   <div className="mb-3">
-                    <label className="form-label">Status *</label>
-                    <select
-                      className="form-select"
-                      name="status"
-                      value={formData.status}
+                    <label className="form-label">Course ID *</label>
+                    <input
+                      type="text"
+                      className="form-control"
+                      name="course_id"
+                      value={formData.course_id}
                       onChange={handleInputChange}
                       required
-                    >
-                      <option value="upcoming">Upcoming</option>
-                      <option value="active">Active</option>
-                      <option value="completed">Completed</option>
-                      <option value="cancelled">Cancelled</option>
-                    </select>
+                      placeholder="e.g., 1, 2, 3"
+                    />
+                    <div className="form-text">
+                      Enter the course ID from the courses table
+                    </div>
                   </div>
                 </div>
-              </div>
-
-              <div className="mb-3">
-                <label className="form-label">Class Name *</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  required
-                  placeholder="e.g., Introduction to Programming"
-                />
-              </div>
-
-              <div className="mb-3">
-                <label className="form-label">Description</label>
-                <textarea
-                  className="form-control"
-                  name="description"
-                  value={formData.description}
-                  onChange={handleInputChange}
-                  rows="3"
-                  placeholder="Class description..."
-                />
               </div>
 
               <div className="row">
                 <div className="col-md-6">
                   <div className="mb-3">
-                    <label className="form-label">Instructor Name</label>
+                    <label className="form-label">Venue</label>
                     <input
                       type="text"
                       className="form-control"
-                      name="instructor_name"
-                      value={formData.instructor_name}
+                      name="venue"
+                      value={formData.venue}
                       onChange={handleInputChange}
-                      placeholder="e.g., Dr. John Smith"
+                      placeholder="e.g., Lecture Hall A, Lab 101"
                     />
                   </div>
                 </div>
@@ -399,10 +371,10 @@ export default function PRLClasses() {
                     <input
                       type="text"
                       className="form-control"
-                      name="schedule"
-                      value={formData.schedule}
+                      name="scheduled_time"
+                      value={formData.scheduled_time}
                       onChange={handleInputChange}
-                      placeholder="e.g., Mon/Wed 10:00 AM"
+                      placeholder="e.g., Mon/Wed 10:00 AM, 14:00-16:00"
                     />
                   </div>
                 </div>
@@ -411,28 +383,18 @@ export default function PRLClasses() {
               <div className="row">
                 <div className="col-md-6">
                   <div className="mb-3">
-                    <label className="form-label">Enrolled Students</label>
+                    <label className="form-label">Lecturer ID</label>
                     <input
-                      type="number"
+                      type="text"
                       className="form-control"
-                      name="enrolled_students"
-                      value={formData.enrolled_students}
+                      name="lecturer_id"
+                      value={formData.lecturer_id}
                       onChange={handleInputChange}
-                      min="0"
+                      placeholder="e.g., 2, 3, 4 (optional)"
                     />
-                  </div>
-                </div>
-                <div className="col-md-6">
-                  <div className="mb-3">
-                    <label className="form-label">Sections</label>
-                    <input
-                      type="number"
-                      className="form-control"
-                      name="sections"
-                      value={formData.sections}
-                      onChange={handleInputChange}
-                      min="1"
-                    />
+                    <div className="form-text">
+                      Enter lecturer user ID (optional)
+                    </div>
                   </div>
                 </div>
               </div>
@@ -602,7 +564,7 @@ export default function PRLClasses() {
                 <div className="modal-content">
                   <div className="modal-header bg-primary text-white">
                     <h5 className="modal-title">
-                      {selectedClass.code} - {selectedClass.name}
+                      {getDisplayValue(selectedClass, 'code')} - {getDisplayValue(selectedClass, 'name')}
                     </h5>
                     <button 
                       type="button" 
@@ -614,22 +576,17 @@ export default function PRLClasses() {
                     <div className="row">
                       <div className="col-md-6">
                         <h6>Class Information</h6>
-                        <p><strong>Description:</strong> {selectedClass.description || 'No description'}</p>
-                        <p><strong>Instructor:</strong> {selectedClass.instructor_name || 'TBA'}</p>
-                        <p><strong>Schedule:</strong> {selectedClass.schedule || 'Not set'}</p>
+                        <p><strong>Class Code:</strong> {getDisplayValue(selectedClass, 'code')}</p>
+                        <p><strong>Course:</strong> {selectedClass.course_name} ({selectedClass.course_code})</p>
+                        <p><strong>Instructor:</strong> {getDisplayValue(selectedClass, 'instructor')}</p>
+                        <p><strong>Venue:</strong> {getDisplayValue(selectedClass, 'venue')}</p>
+                        <p><strong>Schedule:</strong> {getDisplayValue(selectedClass, 'schedule')}</p>
                       </div>
                       <div className="col-md-6">
-                        <h6>Statistics</h6>
-                        <p><strong>Enrolled Students:</strong> {selectedClass.enrolled_students || 0}</p>
+                        <h6>Additional Information</h6>
+                        <p><strong>Faculty:</strong> {selectedClass.faculty_name || 'N/A'}</p>
+                        <p><strong>Students:</strong> {selectedClass.enrolled_students || 0}</p>
                         <p><strong>Sections:</strong> {selectedClass.sections || 1}</p>
-                        <p><strong>Status:</strong> 
-                          <span className={`badge ms-2 ${
-                            selectedClass.status === 'active' ? 'bg-success' : 
-                            selectedClass.status === 'upcoming' ? 'bg-warning' : 'bg-secondary'
-                          }`}>
-                            {selectedClass.status || 'unknown'}
-                          </span>
-                        </p>
                       </div>
                     </div>
                   </div>

@@ -3,11 +3,14 @@ import { useAuth } from '../utils/auth';
 import { apiMethods } from '../utils/api';
 
 export default function Rating() {
-  const [classes, setClasses] = useState([]);
+  const [lecturers, setLecturers] = useState([]);
+  const [courses, setCourses] = useState([]);
   const [myRatings, setMyRatings] = useState([]);
-  const [selectedClass, setSelectedClass] = useState(null); // Changed to store entire class object
-  const [rating, setRating] = useState(5); // Changed to numeric
+  const [selectedLecturer, setSelectedLecturer] = useState('');
+  const [selectedCourse, setSelectedCourse] = useState('');
+  const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
+  const [ratingType, setRatingType] = useState('teaching');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -15,13 +18,13 @@ export default function Rating() {
 
   const { user } = useAuth();
 
-  // Numeric rating options with text labels
-  const ratingOptions = [
-    { value: 5, label: 'Excellent', description: 'Outstanding performance', emoji: '⭐️⭐️⭐️⭐️⭐️' },
-    { value: 4, label: 'Very Good', description: 'Above expectations', emoji: '⭐️⭐️⭐️⭐️' },
-    { value: 3, label: 'Good', description: 'Meets expectations', emoji: '⭐️⭐️⭐️' },
-    { value: 2, label: 'Fair', description: 'Below expectations', emoji: '⭐️⭐️' },
-    { value: 1, label: 'Poor', description: 'Unsatisfactory', emoji: '⭐️' }
+  // Valid rating types for your backend
+  const ratingTypes = [
+    { value: 'teaching', label: 'Teaching Quality' },
+    { value: 'subject_knowledge', label: 'Subject Knowledge' },
+    { value: 'communication', label: 'Communication' },
+    { value: 'punctuality', label: 'Punctuality' },
+    { value: 'overall', label: 'Overall' }
   ];
 
   useEffect(() => {
@@ -30,24 +33,32 @@ export default function Rating() {
 
   const fetchData = async () => {
     try {
-      const classesRes = await apiMethods.getClasses();
+      setLoading(true);
+      setError('');
 
-      if (classesRes.success) setClasses(classesRes.data || []);
+      // Fetch all necessary data
+      const [lecturersRes, coursesRes] = await Promise.all([
+        apiMethods.getLecturers(),
+        apiMethods.getCourses()
+      ]);
 
-      // Try to get ratings, but don't fail if it errors
+      if (lecturersRes.success) setLecturers(lecturersRes.data || []);
+      if (coursesRes.success) setCourses(coursesRes.data || []);
+
+      // Fetch user's ratings
       try {
-        const ratingsRes = user?.role === 'Lecturer' 
-          ? await apiMethods.getLecturerRatings()
-          : await apiMethods.getMyRatings();
-        
-        if (ratingsRes.success) setMyRatings(ratingsRes.data || []);
+        const ratingsRes = await apiMethods.getMyRatings();
+        if (ratingsRes.success) {
+          setMyRatings(ratingsRes.data || []);
+        }
       } catch (ratingsError) {
         console.warn('Could not load ratings:', ratingsError);
         setMyRatings([]);
       }
+
     } catch (error) {
       console.error('Error fetching data:', error);
-      setError('Failed to load some data');
+      setError('Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -57,8 +68,13 @@ export default function Rating() {
     e.preventDefault();
     
     // Validation
-    if (!selectedClass) {
-      setError('Please select a class');
+    if (!selectedLecturer) {
+      setError('Please select a lecturer');
+      return;
+    }
+
+    if (!selectedCourse) {
+      setError('Please select a course');
       return;
     }
 
@@ -67,9 +83,8 @@ export default function Rating() {
       return;
     }
 
-    // Validate that lecturer_id exists
-    if (!selectedClass.lecturer_id) {
-      setError('Selected class does not have a valid lecturer. Please contact administrator.');
+    if (!ratingType) {
+      setError('Please select a rating type');
       return;
     }
 
@@ -78,21 +93,21 @@ export default function Rating() {
     setSuccess('');
 
     try {
-      // Prepare rating data with NUMERIC rating and all required fields
+      // Prepare rating data according to your database schema
       const ratingData = {
-        rating: rating, // This is now numeric: 1, 2, 3, 4, or 5
-        comment: comment.trim(),
-        class_name: selectedClass.class_name,
-        rating_type: 'class_rating',
-        lecturer_id: selectedClass.lecturer_id,
-        course_id: selectedClass.course_id
+        rating: Number(rating),
+        comment: comment.trim() || '',
+        rating_type: ratingType,
+        lecturer_id: parseInt(selectedLecturer),
+        course_id: parseInt(selectedCourse)
+        // user_id will be set automatically by the backend from the token
       };
 
-      console.log('Submitting rating data:', ratingData);
+      console.log('Submitting rating (frontend):', ratingData);
 
-      // Validate all required fields are present
-      const requiredFields = ['rating', 'class_name', 'rating_type', 'lecturer_id'];
-      const missingFields = requiredFields.filter(field => !ratingData[field]);
+      // Validate all required fields are present and valid
+      const requiredFields = ['rating', 'rating_type', 'lecturer_id', 'course_id'];
+      const missingFields = requiredFields.filter(field => !ratingData[field] && ratingData[field] !== 0);
       
       if (missingFields.length > 0) {
         setError(`Missing required fields: ${missingFields.join(', ')}`);
@@ -100,32 +115,39 @@ export default function Rating() {
         return;
       }
 
-      const response = await fetch('https://luct-7.onrender.com/api/ratings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(ratingData)
-      });
+      // Validate field types
+      if (typeof ratingData.rating !== 'number' || ratingData.rating < 1 || ratingData.rating > 5) {
+        setError('Rating must be a number between 1 and 5');
+        setSubmitting(false);
+        return;
+      }
 
-      const responseData = await response.json();
-      console.log('Backend response:', responseData);
+      if (typeof ratingData.lecturer_id !== 'number' || ratingData.lecturer_id <= 0) {
+        setError('Invalid lecturer selected');
+        setSubmitting(false);
+        return;
+      }
 
-      if (response.ok && responseData.success) {
+      if (typeof ratingData.course_id !== 'number' || ratingData.course_id <= 0) {
+        setError('Invalid course selected');
+        setSubmitting(false);
+        return;
+      }
+
+      const response = await apiMethods.submitRating(ratingData);
+
+      if (response.success) {
         setSuccess('Rating submitted successfully!');
+        // Reset form
+        setSelectedLecturer('');
+        setSelectedCourse('');
         setRating(5);
         setComment('');
-        setSelectedClass(null);
-        fetchData(); // Refresh ratings
+        setRatingType('teaching');
+        // Refresh ratings
+        fetchData();
       } else {
-        setError(responseData.message || `Error: ${response.status} ${response.statusText}`);
-        
-        // If it's a rating type issue, try alternative rating types
-        if (responseData.message && responseData.message.includes('rating type')) {
-          tryAlternativeRatingTypes(ratingData);
-          return;
-        }
+        setError(response.message || 'Failed to submit rating');
       }
     } catch (error) {
       console.error('Error submitting rating:', error);
@@ -135,74 +157,43 @@ export default function Rating() {
     }
   };
 
-  // Function to try alternative rating types if the first one fails
-  const tryAlternativeRatingTypes = async (baseRatingData) => {
-    const alternativeTypes = ['teaching', 'general', 'overall', 'content', 'class'];
-    
-    for (const ratingType of alternativeTypes) {
-      try {
-        console.log(`Trying rating type: ${ratingType}`);
-        
-        const ratingDataWithNewType = {
-          ...baseRatingData,
-          rating_type: ratingType
-        };
-
-        const response = await fetch('https://luct-7.onrender.com/api/ratings', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          },
-          body: JSON.stringify(ratingDataWithNewType)
-        });
-
-        const responseData = await response.json();
-        console.log(`Tried ${ratingType}:`, responseData);
-
-        if (response.ok && responseData.success) {
-          setSuccess(`Rating submitted successfully with type: ${ratingType}`);
-          setRating(5);
-          setComment('');
-          setSelectedClass(null);
-          fetchData();
-          return; // Success, exit the loop
-        }
-      } catch (error) {
-        console.error(`Error with rating type ${ratingType}:`, error);
-      }
-    }
-    
-    // If we get here, all rating types failed
-    setError('All rating type attempts failed. Please try again later.');
-  };
-
-  const hasRated = (className) => {
-    return myRatings.some(rating => rating.class_name === className);
-  };
-
   const resetForm = () => {
-    setSelectedClass(null);
+    setSelectedLecturer('');
+    setSelectedCourse('');
     setRating(5);
     setComment('');
+    setRatingType('teaching');
     setError('');
     setSuccess('');
   };
 
-  // Get class display name with lecturer and course info
-  const getClassDisplayName = (classItem) => {
-    return `${classItem.class_name} (${classItem.course_name} - ${classItem.lecturer_name})`;
+  // Check if user has already rated this lecturer/course combination for any rating type
+  const hasRated = (lecturerId, courseId) => {
+    return myRatings.some(rating => 
+      rating.lecturer_id == lecturerId && 
+      rating.course_id == courseId
+    );
   };
 
-  // Handle class selection change
-  const handleClassChange = (e) => {
-    const selectedClassName = e.target.value;
-    if (selectedClassName) {
-      const classObj = classes.find(cls => cls.class_name === selectedClassName);
-      setSelectedClass(classObj);
-    } else {
-      setSelectedClass(null);
-    }
+  // Check if user has rated this specific lecturer/course/rating_type combination
+  const hasRatedSpecific = (lecturerId, courseId, type) => {
+    return myRatings.some(rating => 
+      rating.lecturer_id == lecturerId && 
+      rating.course_id == courseId &&
+      rating.rating_type === type
+    );
+  };
+
+  // Get lecturer name by ID
+  const getLecturerName = (lecturerId) => {
+    const lecturer = lecturers.find(l => l.id == lecturerId);
+    return lecturer ? `${lecturer.first_name} ${lecturer.last_name}` : 'Unknown Lecturer';
+  };
+
+  // Get course name by ID
+  const getCourseName = (courseId) => {
+    const course = courses.find(c => c.id == courseId);
+    return course ? `${course.code} - ${course.course_name || course.name}` : 'Unknown Course';
   };
 
   return (
@@ -211,7 +202,7 @@ export default function Rating() {
         <div className="col-12">
           <h2 className="text-primary mb-4">
             <i className="fas fa-star me-2"></i>
-            Class Ratings
+            Rate Your Lecturers & Courses
           </h2>
 
           {/* Success Message */}
@@ -233,12 +224,13 @@ export default function Rating() {
           )}
 
           <div className="row">
+            {/* Rating Form */}
             <div className="col-lg-6 mb-4">
               <div className="card shadow">
                 <div className="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                   <h5 className="mb-0">
                     <i className="fas fa-plus-circle me-2"></i>
-                    Rate a Class
+                    Submit Rating
                   </h5>
                   <button 
                     type="button" 
@@ -252,75 +244,106 @@ export default function Rating() {
                 </div>
                 <div className="card-body">
                   <form onSubmit={handleSubmit}>
+                    {/* Lecturer Selection */}
                     <div className="mb-3">
-                      <label className="form-label fw-bold">Select Class:</label>
+                      <label className="form-label fw-bold">Select Lecturer *</label>
                       <select
                         className="form-select"
-                        value={selectedClass ? selectedClass.class_name : ''}
-                        onChange={handleClassChange}
+                        value={selectedLecturer}
+                        onChange={(e) => setSelectedLecturer(e.target.value)}
                         required
                         disabled={submitting}
                       >
-                        <option value="">Choose a class to rate</option>
-                        {classes.map(classItem => (
-                          <option key={classItem.id} value={classItem.class_name}>
-                            {getClassDisplayName(classItem)}
-                            {!classItem.lecturer_id && ' (No Lecturer)'}
+                        <option value="">Choose a lecturer</option>
+                        {lecturers.map(lecturer => (
+                          <option key={lecturer.id} value={lecturer.id}>
+                            {lecturer.first_name} {lecturer.last_name}
+                            {lecturer.email && ` (${lecturer.email})`}
                           </option>
                         ))}
                       </select>
-                      {selectedClass && !selectedClass.lecturer_id && (
-                        <div className="text-danger mt-2">
-                          <i className="fas fa-exclamation-triangle me-1"></i>
-                          <small>This class has no lecturer assigned and cannot be rated</small>
-                        </div>
-                      )}
-                      {selectedClass && hasRated(selectedClass.class_name) && (
-                        <div className="text-warning mt-2">
-                          <i className="fas fa-exclamation-triangle me-1"></i>
-                          <small>You have already rated this class</small>
-                        </div>
-                      )}
                     </div>
 
-                    <div className="mb-4">
-                      <label className="form-label fw-bold">Rating:</label>
-                      <div className="rating-options">
-                        {ratingOptions.map((option) => (
-                          <div key={option.value} className="form-check mb-2">
-                            <input
-                              className="form-check-input"
-                              type="radio"
-                              name="rating"
-                              id={`rating-${option.value}`}
-                              value={option.value}
-                              checked={rating === option.value}
-                              onChange={(e) => setRating(parseInt(e.target.value))}
-                              disabled={submitting}
-                            />
-                            <label 
-                              className="form-check-label d-flex align-items-center w-100" 
-                              htmlFor={`rating-${option.value}`}
-                            >
-                              <span className="me-3 fs-5">{option.emoji}</span>
-                              <div className="flex-grow-1">
-                                <strong className="d-block">{option.label}</strong>
-                                <small className="text-muted">{option.description}</small>
-                              </div>
-                            </label>
-                          </div>
+                    {/* Course Selection */}
+                    <div className="mb-3">
+                      <label className="form-label fw-bold">Select Course *</label>
+                      <select
+                        className="form-select"
+                        value={selectedCourse}
+                        onChange={(e) => setSelectedCourse(e.target.value)}
+                        required
+                        disabled={submitting}
+                      >
+                        <option value="">Choose a course</option>
+                        {courses.map(course => (
+                          <option key={course.id} value={course.id}>
+                            {course.code} - {course.course_name || course.name}
+                            {course.faculty_name && ` (${course.faculty_name})`}
+                          </option>
                         ))}
+                      </select>
+                    </div>
+
+                    {/* Rating Type */}
+                    <div className="mb-3">
+                      <label className="form-label fw-bold">Rating Category *</label>
+                      <select
+                        className="form-select"
+                        value={ratingType}
+                        onChange={(e) => setRatingType(e.target.value)}
+                        required
+                        disabled={submitting}
+                      >
+                        <option value="">Select rating category</option>
+                        {ratingTypes.map(type => (
+                          <option key={type.value} value={type.value}>
+                            {type.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Rating Stars */}
+                    <div className="mb-3">
+                      <label className="form-label fw-bold">Rating *</label>
+                      <div className="d-flex align-items-center mb-2">
+                        {[1, 2, 3, 4, 5].map(star => (
+                          <button
+                            key={star}
+                            type="button"
+                            className="btn btn-link p-1"
+                            onClick={() => setRating(star)}
+                            disabled={submitting}
+                          >
+                            <i
+                              className={`fas fa-star fa-2x ${
+                                star <= rating ? 'text-warning' : 'text-muted'
+                              }`}
+                            ></i>
+                          </button>
+                        ))}
+                        <span className="ms-3 fw-bold fs-5 text-primary">
+                          {rating}/5
+                        </span>
+                      </div>
+                      <div className="text-muted small">
+                        {rating === 5 && '⭐️⭐️⭐️⭐️⭐️ Excellent - Outstanding performance'}
+                        {rating === 4 && '⭐️⭐️⭐️⭐️ Very Good - Above expectations'}
+                        {rating === 3 && '⭐️⭐️⭐️ Good - Meets expectations'}
+                        {rating === 2 && '⭐️⭐️ Fair - Below expectations'}
+                        {rating === 1 && '⭐️ Poor - Unsatisfactory'}
                       </div>
                     </div>
 
+                    {/* Comment */}
                     <div className="mb-4">
-                      <label className="form-label fw-bold">Comment (optional):</label>
+                      <label className="form-label fw-bold">Comment (optional)</label>
                       <textarea
                         className="form-control"
                         rows="3"
                         value={comment}
                         onChange={(e) => setComment(e.target.value)}
-                        placeholder="Share your experience with this class..."
+                        placeholder="Share your experience with this lecturer and course..."
                         disabled={submitting}
                         maxLength={500}
                       ></textarea>
@@ -329,14 +352,16 @@ export default function Rating() {
                       </div>
                     </div>
 
+                    {/* Submit Button */}
                     <button
                       type="submit"
                       className="btn btn-primary w-100 py-2"
                       disabled={
                         submitting || 
-                        !selectedClass || 
-                        !selectedClass.lecturer_id ||
-                        hasRated(selectedClass.class_name)
+                        !selectedLecturer || 
+                        !selectedCourse ||
+                        !ratingType ||
+                        hasRatedSpecific(selectedLecturer, selectedCourse, ratingType)
                       }
                     >
                       {submitting ? (
@@ -352,10 +377,12 @@ export default function Rating() {
                       )}
                     </button>
 
-                    {selectedClass && hasRated(selectedClass.class_name) && (
+                    {/* Already rated warning */}
+                    {selectedLecturer && selectedCourse && ratingType && 
+                     hasRatedSpecific(selectedLecturer, selectedCourse, ratingType) && (
                       <div className="alert alert-warning mt-3 mb-0 py-2">
-                        <i className="fas fa-info-circle me-2"></i>
-                        You can only rate each class once
+                        <i className="fas fa-exclamation-triangle me-2"></i>
+                        You have already rated {getLecturerName(selectedLecturer)} for {getCourseName(selectedCourse)} in {ratingTypes.find(t => t.value === ratingType)?.label}
                       </div>
                     )}
                   </form>
@@ -363,13 +390,21 @@ export default function Rating() {
               </div>
             </div>
 
+            {/* Ratings History */}
             <div className="col-lg-6">
               <div className="card shadow">
-                <div className="card-header bg-success text-white">
+                <div className="card-header bg-success text-white d-flex justify-content-between align-items-center">
                   <h5 className="mb-0">
                     <i className="fas fa-history me-2"></i>
-                    My Class Ratings ({myRatings.length})
+                    My Ratings ({myRatings.length})
                   </h5>
+                  <button 
+                    className="btn btn-sm btn-light"
+                    onClick={fetchData}
+                    disabled={loading}
+                  >
+                    <i className="fas fa-sync-alt"></i>
+                  </button>
                 </div>
                 <div className="card-body">
                   {loading ? (
@@ -381,42 +416,44 @@ export default function Rating() {
                     <div className="text-center py-5">
                       <i className="fas fa-star fa-3x text-muted mb-3"></i>
                       <h5 className="text-muted">No ratings submitted yet</h5>
-                      <p className="text-muted">Start by rating one of your classes</p>
+                      <p className="text-muted">Start by rating a lecturer and course</p>
                     </div>
                   ) : (
                     <div className="list-group list-group-flush">
                       {myRatings.map((ratingItem) => (
                         <div key={ratingItem.id} className="list-group-item">
                           <div className="d-flex justify-content-between align-items-start mb-2">
-                            <div>
+                            <div className="flex-grow-1">
                               <h6 className="mb-1 text-primary">
-                                {ratingItem.class_name}
+                                {ratingItem.lecturer_name} - {ratingItem.course_name}
                               </h6>
                               <div className="small text-muted mb-1">
-                                {ratingItem.course_name} - {ratingItem.lecturer_name}
+                                <span className="badge bg-info text-capitalize me-2">
+                                  {ratingItem.rating_type?.replace('_', ' ') || 'Rating'}
+                                </span>
+                                {ratingItem.course_code && `Course: ${ratingItem.course_code}`}
                               </div>
-                              <span className="badge bg-info me-2">
-                                {ratingItem.rating_type || 'Class Rating'}
-                              </span>
                             </div>
-                            <small className="text-muted">
-                              {ratingItem.created_at ? new Date(ratingItem.created_at).toLocaleDateString() : 'Recent'}
-                            </small>
-                          </div>
-                          
-                          <div className="mb-2">
-                            <span className={`badge ${
-                              ratingItem.rating >= 4.5 ? 'bg-success' :
-                              ratingItem.rating >= 3.5 ? 'bg-primary' :
-                              ratingItem.rating >= 2.5 ? 'bg-info' :
-                              ratingItem.rating >= 1.5 ? 'bg-warning' : 'bg-danger'
-                            } fs-6`}>
-                              {typeof ratingItem.rating === 'number' ? ratingItem.rating.toFixed(1) : ratingItem.rating}
-                            </span>
+                            <div className="text-end">
+                              <div className="fw-bold text-warning fs-5">
+                                {[1, 2, 3, 4, 5].map(star => (
+                                  <i
+                                    key={star}
+                                    className={`fas fa-star ${
+                                      star <= ratingItem.rating ? 'text-warning' : 'text-muted'
+                                    }`}
+                                  ></i>
+                                ))}
+                                <span className="ms-1">({ratingItem.rating})</span>
+                              </div>
+                              <small className="text-muted">
+                                {ratingItem.created_at ? new Date(ratingItem.created_at).toLocaleDateString() : 'Recent'}
+                              </small>
+                            </div>
                           </div>
                           
                           {ratingItem.comment && (
-                            <div className="bg-light p-2 rounded">
+                            <div className="bg-light p-3 rounded mt-2">
                               <p className="mb-0 small">
                                 <i className="fas fa-comment text-muted me-1"></i>
                                 "{ratingItem.comment}"

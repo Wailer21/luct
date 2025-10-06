@@ -816,14 +816,16 @@ app.get("/api/ratings/lecturer", authenticateToken, async (req, res) => {
   }
 });
 
+// UPDATED AND FIXED ROUTE
 app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => {
   if (!isDatabaseConnected) {
     return sendError(res, "Database temporarily unavailable. Please try again later.", 503);
   }
 
-  const client = await pool.connect();
-  
+  let client; // Define client outside the try...catch block
+
   try {
+    client = await pool.connect(); // Assign client inside the try block
     await client.query('BEGIN');
     
     const { lecturer_id, course_id, rating, comment, rating_type } = req.body;
@@ -836,7 +838,6 @@ app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => 
       student_id: req.user.id 
     });
 
-    // Check if student has already rated this lecturer for this course and rating type
     const existingRating = await client.query(
       `SELECT id FROM ratings 
        WHERE student_id = $1 AND lecturer_id = $2 AND course_id = $3 AND rating_type = $4`,
@@ -870,13 +871,20 @@ app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => 
     }, "Rating submitted successfully");
 
   } catch (error) {
-    await client.query('ROLLBACK');
     console.error("❌ Submit rating error:", error);
+    // Attempt to rollback only if the transaction started
+    if (client) {
+      await client.query('ROLLBACK').catch(rollbackError => console.error('❌ Rollback failed:', rollbackError));
+    }
     sendError(res, "Failed to submit rating: " + error.message);
   } finally {
-    client.release();
+    // Only release the client if it was successfully connected
+    if (client) {
+      client.release();
+    }
   }
 });
+
 
 // Get lecturer rating statistics
 app.get("/api/ratings/lecturer/:id/stats", authenticateToken, async (req, res) => {
@@ -1362,17 +1370,26 @@ app.put("/api/classes/:id", authenticateToken, async (req, res) => {
   }
 });
 
+// UPDATED AND FIXED ROUTE
 app.delete("/api/classes/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
+    // First, get the class name before trying to delete it
+    const classInfo = await executeQuery("SELECT class_name FROM classes WHERE id = $1", [id]);
+    if (classInfo.rows.length === 0) {
+      return sendError(res, "Class not found", 404);
+    }
+    const className = classInfo.rows[0].class_name;
+
+    // CORRECTED: Check reports using class_name, not a non-existent class_id
     const reportsCheck = await executeQuery(
-      "SELECT id FROM reports WHERE class_id = $1 LIMIT 1",
-      [id]
+      "SELECT id FROM reports WHERE class_name = $1 LIMIT 1",
+      [className]
     );
 
     if (reportsCheck.rows.length > 0) {
-      return sendError(res, "Cannot delete class with existing reports", 400);
+      return sendError(res, "Cannot delete class with existing reports. Please reassign or delete the reports first.", 400);
     }
 
     const result = await executeQuery(
@@ -1380,6 +1397,7 @@ app.delete("/api/classes/:id", authenticateToken, async (req, res) => {
       [id]
     );
 
+    // This check is slightly redundant now but safe to keep
     if (!result.rows.length) {
       return sendError(res, "Class not found", 404);
     }

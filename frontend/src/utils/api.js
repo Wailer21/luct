@@ -315,54 +315,59 @@ export const api = {
   },
 };
 
-// FIXED: Proper API methods using the api wrapper
+// Enhanced API methods using the api wrapper
 export const apiMethods = {
   // Auth
   login: (credentials) => api.post(API_ENDPOINTS.LOGIN, credentials),
   register: (userData) => api.post(API_ENDPOINTS.REGISTER, userData),
   getProfile: () => api.get(API_ENDPOINTS.ME),
   
-  // Data - FIXED: Removed duplicates and use proper api wrapper
+  // Data
   getFaculties: () => api.get(API_ENDPOINTS.FACULTIES),
   getCourses: () => api.get(API_ENDPOINTS.COURSES),
-  getClasses: () => api.get(API_ENDPOINTS.CLASSES), // Single getClasses method
+  getClasses: () => api.get(API_ENDPOINTS.CLASSES),
   getMyClasses: () => api.get(API_ENDPOINTS.MY_CLASSES),
   getLecturers: () => api.get(API_ENDPOINTS.LECTURERS),
   
-  // Class Management - FIXED: Use api wrapper instead of direct apiCall
+  // Class Management
   getProgramClasses: (programId) => api.get(API_ENDPOINTS.PROGRAM_CLASSES(programId)),
   createClass: (classData) => api.post(API_ENDPOINTS.CLASSES, classData),
-  updateClass: (classId, classData) => api.put(API_ENDPOINTS.CLASSES + `/${classId}`, classData),
-  deleteClass: (classId) => api.delete(API_ENDPOINTS.CLASSES + `/${classId}`),
+  updateClass: (classId, classData) => api.put(`${API_ENDPOINTS.CLASSES}/${classId}`, classData),
+  deleteClass: (classId) => api.delete(`${API_ENDPOINTS.CLASSES}/${classId}`),
   
   // Reports
   getReports: (params = {}) => api.get(API_ENDPOINTS.REPORTS, params),
   getReportStats: () => api.get(API_ENDPOINTS.REPORTS_STATS),
   getReportById: (id) => api.get(API_ENDPOINTS.REPORTS_BY_ID(id)),
   createReport: (data) => api.post(API_ENDPOINTS.REPORTS, data),
+  updateReport: (id, data) => api.put(API_ENDPOINTS.REPORTS_BY_ID(id), data),
 
   // Feedback endpoints
   submitFeedback: (reportId, feedback) => api.post(API_ENDPOINTS.REPORTS_FEEDBACK(reportId), { feedback }),
   getMyReports: () => api.get(API_ENDPOINTS.MY_REPORTS),
   
-  // Ratings
+  // Ratings - UPDATED with improved submitRating method
   getMyRatings: () => api.get(API_ENDPOINTS.RATINGS_MY),
   getLecturerRatings: () => api.get(API_ENDPOINTS.RATINGS_LECTURER),
   submitRating: (ratingData) => {
+    // Clean up the data - only send what the backend expects
     const validatedData = {
       rating: Number(ratingData.rating),
       comment: ratingData.comment || '',
-      class_name: ratingData.class_name,
-      rating_type: ratingData.rating_type
+      rating_type: ratingData.rating_type,
+      lecturer_id: ratingData.lecturer_id,
+      course_id: ratingData.course_id
+      // Remove class_name if it's not needed
     };
 
-    if (ratingData.rating_type === 'lecturer' && ratingData.lecturer_id) {
-      validatedData.lecturer_id = ratingData.lecturer_id;
-    } else if (ratingData.rating_type === 'course' && ratingData.course_id) {
-      validatedData.course_id = ratingData.course_id;
-    }
+    // Remove undefined values
+    Object.keys(validatedData).forEach(key => {
+      if (validatedData[key] === undefined) {
+        delete validatedData[key];
+      }
+    });
 
-    console.log('📊 Submitting rating:', validatedData);
+    console.log('📊 Submitting rating (cleaned):', validatedData);
     return api.post(API_ENDPOINTS.RATINGS, validatedData);
   },
   
