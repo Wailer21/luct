@@ -44,10 +44,10 @@ export default function PrivateRoute({ children, roles = [] }) {
                 <i className="fas fa-arrow-left me-2"></i>
                 Go Back
               </button>
-              <Navigate to="/" className="btn btn-outline-primary">
+              <button onClick={() => window.location.href = '/'} className="btn btn-outline-primary">
                 <i className="fas fa-home me-2"></i>
                 Back to Home
-              </Navigate>
+              </button>
             </div>
           </div>
         </div>

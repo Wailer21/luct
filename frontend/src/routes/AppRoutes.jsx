@@ -27,6 +27,9 @@ import PRLMonitoring from '../pages/PRLMonitoring'
 import PRLReports from '../pages/PRLReports'
 import PLCourses from '../pages/PLCourses'
 
+// Feedback Components
+import LecturerFeedback from '../pages/LecturerFeedback'
+
 import PublicRoute from './PublicRoute'
 import PrivateRoute from './PrivateRoute'
 import NotFound from '../pages/NotFound'
@@ -100,6 +103,16 @@ export default function AppRoutes() {
         }
       />
 
+      {/* Lecturer Feedback Route */}
+      <Route
+        path="/my-feedback"
+        element={
+          <PrivateRoute roles={['Lecturer']}>
+            <LecturerFeedback />
+          </PrivateRoute>
+        }
+      />
+
       {/* Student Specific Routes */}
       <Route
         path="/monitoring"
@@ -119,12 +132,12 @@ export default function AppRoutes() {
         }
       />
 
-      {/* Management Routes */}
+      {/* PRL Feedback Routes */}
       <Route
-        path="/courses"
+        path="/prl-reports"
         element={
-          <PrivateRoute roles={['PL', 'PRL', 'Admin']}>
-            <Courses />
+          <PrivateRoute roles={['PRL', 'PL', 'Admin']}>
+            <PRLReports />
           </PrivateRoute>
         }
       />
@@ -134,6 +147,16 @@ export default function AppRoutes() {
         element={
           <PrivateRoute roles={['PRL', 'PL', 'Admin']}>
             <Feedback />
+          </PrivateRoute>
+        }
+      />
+
+      {/* Management Routes */}
+      <Route
+        path="/courses"
+        element={
+          <PrivateRoute roles={['PL', 'PRL', 'Admin']}>
+            <Courses />
           </PrivateRoute>
         }
       />
@@ -161,6 +184,53 @@ export default function AppRoutes() {
         element={
           <PrivateRoute roles={['Admin']}>
             <UserManagement />
+          </PrivateRoute>
+        }
+      />
+
+      {/* PRL Management Routes */}
+      <Route
+        path="/prl-courses"
+        element={
+          <PrivateRoute roles={['PRL']}>
+            <PRLCourses />
+          </PrivateRoute>
+        }
+      />
+
+      <Route
+        path="/prl-classes"
+        element={
+          <PrivateRoute roles={['PRL']}>
+            <PRLClasses />
+          </PrivateRoute>
+        }
+      />
+
+      <Route
+        path="/prl-monitoring"
+        element={
+          <PrivateRoute roles={['PRL']}>
+            <PRLMonitoring />
+          </PrivateRoute>
+        }
+      />
+
+      {/* PL Management Routes */}
+      <Route
+        path="/pl-courses"
+        element={
+          <PrivateRoute roles={['PL']}>
+            <PLCourses />
+          </PrivateRoute>
+        }
+      />
+
+      <Route
+        path="/lecturer-assignment"
+        element={
+          <PrivateRoute roles={['PL']}>
+            <LecturerAssignment />
           </PrivateRoute>
         }
       />

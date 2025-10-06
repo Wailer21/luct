@@ -15,12 +15,14 @@ export const API_ENDPOINTS = {
   CLASSES: `${API_BASE_URL}/api/classes`,
   MY_CLASSES: `${API_BASE_URL}/api/my-classes`,
   LECTURERS: `${API_BASE_URL}/api/lecturers`,
+  PROGRAM_CLASSES: (programId) => `${API_BASE_URL}/api/programs/${programId}/classes`,
 
   // Reports
   REPORTS: `${API_BASE_URL}/api/reports`,
   REPORTS_STATS: `${API_BASE_URL}/api/reports/stats`,
   REPORTS_BY_ID: (id) => `${API_BASE_URL}/api/reports/${id}`,
   REPORTS_FEEDBACK: (id) => `${API_BASE_URL}/api/reports/${id}/feedback`,
+  MY_REPORTS: `${API_BASE_URL}/api/reports/my-reports`,
 
   // Ratings
   RATINGS: `${API_BASE_URL}/api/ratings`,
@@ -56,7 +58,7 @@ export const getAuthToken = () => {
 // Enhanced API instance with interceptors
 const apiInstance = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000, // Reduced to 10 seconds for faster feedback
+  timeout: 15000,
 });
 
 // Request interceptor to add auth token
@@ -68,10 +70,9 @@ apiInstance.interceptors.request.use(
     }
     config.headers["Content-Type"] = "application/json";
     
-    // Add timestamp for debugging
     config.metadata = { startTime: new Date() };
     
-    console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`);
+    console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`, config.data || config.params);
     return config;
   },
   (error) => {
@@ -88,7 +89,8 @@ apiInstance.interceptors.response.use(
     
     console.log(`✅ API Response: ${response.config.method?.toUpperCase()} ${response.config.url}`, {
       status: response.status,
-      duration: `${duration}ms`
+      duration: `${duration}ms`,
+      data: response.data
     });
     
     return response;
@@ -101,7 +103,8 @@ apiInstance.interceptors.response.use(
       status: error.response?.status,
       duration: `${duration}ms`,
       error: error.message,
-      code: error.code
+      code: error.code,
+      responseData: error.response?.data
     });
 
     if (error.response?.status === 401) {
@@ -131,17 +134,9 @@ export const apiCall = async (endpoint, options = {}, retries = 2) => {
 
     const response = await apiInstance(config);
     
-    // Handle HTML error responses (when backend returns HTML instead of JSON)
     const contentType = response.headers['content-type'];
     if (contentType && contentType.includes('text/html')) {
       throw new Error(`Server returned HTML error page (Status: ${response.status})`);
-    }
-    
-    // Handle backend response format
-    if (response.data && response.data.success === false) {
-      const error = new Error(response.data.message || "Request failed");
-      error.response = response;
-      throw error;
     }
     
     return response.data;
@@ -154,28 +149,32 @@ export const apiCall = async (endpoint, options = {}, retries = 2) => {
       error: error.message,
       code: error.code,
       status: error.response?.status,
+      responseData: error.response?.data,
       isTimeout,
       isNetworkError,
       isCorsError,
       retriesLeft: retries
     });
 
-    // Retry logic for timeout and network errors (but not for 4xx errors)
+    let errorMessage = error.response?.data?.message || error.message || "API request failed";
+    
+    if (error.response?.status === 400 && error.response?.data) {
+      if (typeof error.response.data === 'string') {
+        errorMessage = error.response.data;
+      } else if (error.response.data.errors) {
+        errorMessage = Object.values(error.response.data.errors).flat().join(', ');
+      } else if (error.response.data.error) {
+        errorMessage = error.response.data.error;
+      }
+    }
+
     if ((isTimeout || isNetworkError) && retries > 0 && !error.response?.status?.toString().startsWith('4')) {
-      const delay = Math.pow(2, maxRetries - retries) * 1000; // Exponential backoff
+      const delay = Math.pow(2, maxRetries - retries) * 1000;
       console.log(`⏳ Retrying in ${delay}ms... (${retries} retries left)`);
       
       await new Promise(resolve => setTimeout(resolve, delay));
       return apiCall(endpoint, options, retries - 1);
     }
-    
-    // Enhanced error handling
-    if (error.response?.status === 401) {
-      // Already handled in interceptor
-    }
-    
-    // Return a consistent error format
-    let errorMessage;
     
     if (isCorsError) {
       errorMessage = "CORS error: Backend is not configured to accept requests from this origin. Please check backend CORS settings.";
@@ -184,13 +183,11 @@ export const apiCall = async (endpoint, options = {}, retries = 2) => {
     } else if (isNetworkError) {
       errorMessage = "Network connection failed. Please check your internet connection.";
     } else if (error.response?.status === 400) {
-      errorMessage = "Bad Request: Invalid data sent to server. Please check your input.";
+      errorMessage = `Bad Request: ${errorMessage}`;
     } else if (error.response?.status === 404) {
       errorMessage = "Endpoint not found. The requested resource does not exist.";
     } else if (error.response?.status === 500) {
       errorMessage = "Server error. Please try again later.";
-    } else {
-      errorMessage = error.response?.data?.message || error.message || "API request failed";
     }
     
     throw {
@@ -318,31 +315,56 @@ export const api = {
   },
 };
 
-// Convenience methods for specific endpoints
+// FIXED: Proper API methods using the api wrapper
 export const apiMethods = {
   // Auth
   login: (credentials) => api.post(API_ENDPOINTS.LOGIN, credentials),
   register: (userData) => api.post(API_ENDPOINTS.REGISTER, userData),
   getProfile: () => api.get(API_ENDPOINTS.ME),
   
-  // Data
+  // Data - FIXED: Removed duplicates and use proper api wrapper
   getFaculties: () => api.get(API_ENDPOINTS.FACULTIES),
   getCourses: () => api.get(API_ENDPOINTS.COURSES),
-  getClasses: () => api.get(API_ENDPOINTS.CLASSES),
+  getClasses: () => api.get(API_ENDPOINTS.CLASSES), // Single getClasses method
   getMyClasses: () => api.get(API_ENDPOINTS.MY_CLASSES),
   getLecturers: () => api.get(API_ENDPOINTS.LECTURERS),
+  
+  // Class Management - FIXED: Use api wrapper instead of direct apiCall
+  getProgramClasses: (programId) => api.get(API_ENDPOINTS.PROGRAM_CLASSES(programId)),
+  createClass: (classData) => api.post(API_ENDPOINTS.CLASSES, classData),
+  updateClass: (classId, classData) => api.put(API_ENDPOINTS.CLASSES + `/${classId}`, classData),
+  deleteClass: (classId) => api.delete(API_ENDPOINTS.CLASSES + `/${classId}`),
   
   // Reports
   getReports: (params = {}) => api.get(API_ENDPOINTS.REPORTS, params),
   getReportStats: () => api.get(API_ENDPOINTS.REPORTS_STATS),
   getReportById: (id) => api.get(API_ENDPOINTS.REPORTS_BY_ID(id)),
   createReport: (data) => api.post(API_ENDPOINTS.REPORTS, data),
-  submitFeedback: (id, feedback) => api.post(API_ENDPOINTS.REPORTS_FEEDBACK(id), { feedback }),
+
+  // Feedback endpoints
+  submitFeedback: (reportId, feedback) => api.post(API_ENDPOINTS.REPORTS_FEEDBACK(reportId), { feedback }),
+  getMyReports: () => api.get(API_ENDPOINTS.MY_REPORTS),
   
   // Ratings
   getMyRatings: () => api.get(API_ENDPOINTS.RATINGS_MY),
   getLecturerRatings: () => api.get(API_ENDPOINTS.RATINGS_LECTURER),
-  submitRating: (ratingData) => api.post(API_ENDPOINTS.RATINGS, ratingData),
+  submitRating: (ratingData) => {
+    const validatedData = {
+      rating: Number(ratingData.rating),
+      comment: ratingData.comment || '',
+      class_name: ratingData.class_name,
+      rating_type: ratingData.rating_type
+    };
+
+    if (ratingData.rating_type === 'lecturer' && ratingData.lecturer_id) {
+      validatedData.lecturer_id = ratingData.lecturer_id;
+    } else if (ratingData.rating_type === 'course' && ratingData.course_id) {
+      validatedData.course_id = ratingData.course_id;
+    }
+
+    console.log('📊 Submitting rating:', validatedData);
+    return api.post(API_ENDPOINTS.RATINGS, validatedData);
+  },
   
   // Student Monitoring
   getStudentAttendance: (params = {}) => api.get(API_ENDPOINTS.STUDENT_ATTENDANCE, params),
@@ -418,7 +440,6 @@ export const getConnectionStatus = () => connectionStatus;
 export const initializeApp = async () => {
   console.log('🚀 Initializing application...');
   
-  // Wait a bit for backend to wake up (if it's sleeping)
   await new Promise(resolve => setTimeout(resolve, 2000));
   
   const result = await testBackendConnection();
@@ -427,7 +448,6 @@ export const initializeApp = async () => {
   if (!result.connected) {
     console.warn('⚠️ Application starting in limited mode. Some features may not work.');
     
-    // Show user-friendly warning
     if (typeof window !== 'undefined' && result.isCorsError) {
       setTimeout(() => {
         const alertDiv = document.createElement('div');
@@ -453,7 +473,7 @@ export const connectionUtils = {
   initializeApp
 };
 
-// Auto-initialize (but don't block app startup)
+// Auto-initialize
 setTimeout(() => {
   initializeApp();
 }, 1000);
