@@ -69,12 +69,11 @@ const allowedOrigins = [
   'https://frontend-cbjcz3iqp-thomonyaneneo-gmailcoms-projects.vercel.app',
   'https://frontend-git-main-thomonyaneneo-gmailcoms-projects.vercel.app',
   'https://frontend-thomonyaneneo-gmailcoms-projects.vercel.app',
-  'https://luct-reporting-app.vercel.app' // Add your main Vercel domain
+  'https://luct-reporting-app.vercel.app'
 ];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     
     if (allowedOrigins.indexOf(origin) !== -1) {
@@ -194,13 +193,11 @@ function validateReport(req, res, next) {
     return sendError(res, "All required fields must be filled", 400);
   }
   
-  // Validate class name format (BSCSEM1-A, BSCITY2-B, etc.)
   const classRegex = /^[A-Z]{3,}[A-Z0-9]*-\w+$/;
   if (!class_name.match(classRegex)) {
     return sendError(res, "Class name must be in format: ProgramCodeYear-Group (e.g., BSCSEM1-A, BSCITY2-B)", 400);
   }
   
-  // Improved week validation
   let weekNumber = week_of_reporting;
   
   if (typeof week_of_reporting === 'string') {
@@ -227,6 +224,32 @@ function validateReport(req, res, next) {
   }
   
   req.body.week_of_reporting = Number(weekNumber);
+  next();
+}
+
+// ========================
+// RATINGS VALIDATION
+// ========================
+function validateRating(req, res, next) {
+  const { lecturer_id, course_id, rating, comment, rating_type } = req.body;
+  
+  if (!lecturer_id || !course_id || !rating || !rating_type) {
+    return sendError(res, "Lecturer, course, rating, and rating type are required", 400);
+  }
+  
+  if (rating < 1 || rating > 5) {
+    return sendError(res, "Rating must be between 1 and 5", 400);
+  }
+  
+  const validRatingTypes = ["teaching", "subject_knowledge", "communication", "punctuality", "overall"];
+  if (!validRatingTypes.includes(rating_type)) {
+    return sendError(res, "Invalid rating type", 400);
+  }
+  
+  if (comment && comment.length > 500) {
+    return sendError(res, "Comment must be less than 500 characters", 400);
+  }
+  
   next();
 }
 
@@ -270,14 +293,12 @@ app.post("/api/auth/register", validateRegister, async (req, res) => {
     const { first_name, last_name, email, password, role } = req.body;
     console.log('📝 Registration attempt:', { email, role });
     
-    // Check if user exists
     const exists = await client.query("SELECT id FROM users WHERE email = $1", [email]);
     if (exists.rows.length) {
       await client.query('ROLLBACK');
       return sendError(res, "Email already registered", 400);
     }
 
-    // Get role_id
     const roleRes = await client.query("SELECT id FROM roles WHERE name = $1", [role]);
     if (!roleRes.rows.length) {
       await client.query('ROLLBACK');
@@ -285,7 +306,6 @@ app.post("/api/auth/register", validateRegister, async (req, res) => {
     }
     const role_id = roleRes.rows[0].id;
 
-    // Hash password and create user
     const hash = await bcrypt.hash(password, 12);
     
     const insertRes = await client.query(
@@ -297,7 +317,6 @@ app.post("/api/auth/register", validateRegister, async (req, res) => {
     
     const user = insertRes.rows[0];
 
-    // Get role name for token
     const roleNameRes = await client.query("SELECT name FROM roles WHERE id = $1", [role_id]);
     const roleName = roleNameRes.rows[0].name;
 
@@ -488,6 +507,32 @@ app.get("/api/my-classes", authenticateToken, async (req, res) => {
   }
 });
 
+// ========================
+// LECTURERS ROUTES
+// ========================
+app.get("/api/lecturers", authenticateToken, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      `SELECT u.id, u.first_name, u.last_name, u.email,
+             COUNT(DISTINCT r.id) as total_reports,
+             COUNT(DISTINCT c.id) as courses_taught,
+             COALESCE(AVG(rat.rating), 0) as avg_rating
+       FROM users u
+       LEFT JOIN reports r ON u.id = r.lecturer_id
+       LEFT JOIN classes cl ON u.id = cl.lecturer_id
+       LEFT JOIN courses c ON cl.course_id = c.id
+       LEFT JOIN ratings rat ON u.id = rat.lecturer_id
+       WHERE u.role_id = (SELECT id FROM roles WHERE name = 'Lecturer')
+       GROUP BY u.id, u.first_name, u.last_name, u.email
+       ORDER BY u.first_name, u.last_name`
+    );
+    sendSuccess(res, rows.rows, "Lecturers fetched successfully");
+  } catch (error) {
+    console.error("❌ Lecturers error:", error);
+    sendError(res, "Failed to fetch lecturers: " + error.message);
+  }
+});
+
 // -----------------
 // REPORTS ROUTES
 // -----------------
@@ -585,7 +630,6 @@ app.post("/api/reports", authenticateToken, validateReport, async (req, res) => 
 
     console.log('📝 Creating report with class name:', class_name);
 
-    // Get course code for the report
     const courseRes = await client.query("SELECT code FROM courses WHERE id = $1", [course_id]);
     if (!courseRes.rows.length) {
       await client.query('ROLLBACK');
@@ -692,6 +736,486 @@ app.post("/api/reports/:id/feedback", authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("❌ Feedback error:", error);
     sendError(res, "Failed to submit feedback: " + error.message);
+  }
+});
+
+// ========================
+// RATINGS ROUTES
+// ========================
+app.get("/api/ratings", authenticateToken, async (req, res) => {
+  try {
+    const rows = await executeQuery(
+      `SELECT r.*, 
+              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
+              c.name as course_name,
+              c.code as course_code,
+              CONCAT(stud.first_name, ' ', stud.last_name) as student_name
+       FROM ratings r
+       JOIN users u ON r.lecturer_id = u.id
+       JOIN courses c ON r.course_id = c.id
+       JOIN users stud ON r.student_id = stud.id
+       ORDER BY r.created_at DESC
+       LIMIT 100`
+    );
+    sendSuccess(res, rows.rows, "Ratings fetched successfully");
+  } catch (error) {
+    console.error("❌ Ratings error:", error);
+    sendError(res, "Failed to fetch ratings: " + error.message);
+  }
+});
+
+app.get("/api/ratings/my-ratings", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'Student') {
+      return sendError(res, "Access denied. Students only.", 403);
+    }
+
+    const rows = await executeQuery(
+      `SELECT r.*, 
+              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
+              c.name as course_name,
+              c.code as course_code
+       FROM ratings r
+       JOIN users u ON r.lecturer_id = u.id
+       JOIN courses c ON r.course_id = c.id
+       WHERE r.student_id = $1
+       ORDER BY r.created_at DESC`,
+      [req.user.id]
+    );
+
+    sendSuccess(res, rows.rows, "My ratings fetched successfully");
+  } catch (error) {
+    console.error("❌ My ratings error:", error);
+    sendError(res, "Failed to fetch your ratings: " + error.message);
+  }
+});
+
+app.get("/api/ratings/lecturer", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'Lecturer') {
+      return sendError(res, "Access denied. Lecturers only.", 403);
+    }
+
+    const rows = await executeQuery(
+      `SELECT r.*, 
+              c.name as course_name,
+              c.code as course_code,
+              CONCAT(stud.first_name, ' ', stud.last_name) as student_name
+       FROM ratings r
+       JOIN courses c ON r.course_id = c.id
+       JOIN users stud ON r.student_id = stud.id
+       WHERE r.lecturer_id = $1
+       ORDER BY r.created_at DESC`,
+      [req.user.id]
+    );
+
+    sendSuccess(res, rows.rows, "Lecturer ratings fetched successfully");
+  } catch (error) {
+    console.error("❌ Lecturer ratings error:", error);
+    sendError(res, "Failed to fetch lecturer ratings: " + error.message);
+  }
+});
+
+app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => {
+  if (!isDatabaseConnected) {
+    return sendError(res, "Database temporarily unavailable. Please try again later.", 503);
+  }
+
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const { lecturer_id, course_id, rating, comment, rating_type } = req.body;
+
+    console.log('⭐ Rating submission:', { 
+      lecturer_id, 
+      course_id, 
+      rating, 
+      rating_type,
+      student_id: req.user.id 
+    });
+
+    // Check if student has already rated this lecturer for this course and rating type
+    const existingRating = await client.query(
+      `SELECT id FROM ratings 
+       WHERE student_id = $1 AND lecturer_id = $2 AND course_id = $3 AND rating_type = $4`,
+      [req.user.id, lecturer_id, course_id, rating_type]
+    );
+
+    if (existingRating.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return sendError(res, "You have already rated this lecturer for this course and rating type", 400);
+    }
+
+    const insertRes = await client.query(
+      `INSERT INTO ratings (student_id, lecturer_id, course_id, rating, comment, rating_type, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       RETURNING id, rating, rating_type`,
+      [req.user.id, lecturer_id, course_id, rating, comment || null, rating_type]
+    );
+
+    await client.query('COMMIT');
+    
+    console.log('✅ Rating submitted successfully:', {
+      id: insertRes.rows[0].id,
+      rating: insertRes.rows[0].rating,
+      rating_type: insertRes.rows[0].rating_type
+    });
+    
+    sendCreated(res, { 
+      id: insertRes.rows[0].id,
+      rating: insertRes.rows[0].rating,
+      rating_type: insertRes.rows[0].rating_type
+    }, "Rating submitted successfully");
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("❌ Submit rating error:", error);
+    sendError(res, "Failed to submit rating: " + error.message);
+  } finally {
+    client.release();
+  }
+});
+
+// Get lecturer rating statistics
+app.get("/api/ratings/lecturer/:id/stats", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const stats = await executeQuery(
+      `SELECT 
+        rating_type,
+        COUNT(*) as total_ratings,
+        ROUND(AVG(rating), 2) as average_rating,
+        COUNT(CASE WHEN rating = 5 THEN 1 END) as five_star,
+        COUNT(CASE WHEN rating = 4 THEN 1 END) as four_star,
+        COUNT(CASE WHEN rating = 3 THEN 1 END) as three_star,
+        COUNT(CASE WHEN rating = 2 THEN 1 END) as two_star,
+        COUNT(CASE WHEN rating = 1 THEN 1 END) as one_star
+       FROM ratings
+       WHERE lecturer_id = $1
+       GROUP BY rating_type
+       ORDER BY rating_type`,
+      [id]
+    );
+
+    const overallStats = await executeQuery(
+      `SELECT 
+        ROUND(AVG(rating), 2) as overall_rating,
+        COUNT(*) as total_ratings
+       FROM ratings
+       WHERE lecturer_id = $1`,
+      [id]
+    );
+
+    const recentComments = await executeQuery(
+      `SELECT r.comment, r.rating, r.created_at,
+              c.name as course_name,
+              CONCAT(u.first_name, ' ', u.last_name) as student_name
+       FROM ratings r
+       JOIN courses c ON r.course_id = c.id
+       JOIN users u ON r.student_id = u.id
+       WHERE r.lecturer_id = $1 AND r.comment IS NOT NULL
+       ORDER BY r.created_at DESC
+       LIMIT 10`,
+      [id]
+    );
+
+    sendSuccess(res, {
+      rating_breakdown: stats.rows,
+      overall: overallStats.rows[0] || { overall_rating: 0, total_ratings: 0 },
+      recent_comments: recentComments.rows
+    }, "Lecturer rating statistics fetched successfully");
+
+  } catch (error) {
+    console.error("❌ Lecturer stats error:", error);
+    sendError(res, "Failed to fetch lecturer statistics: " + error.message);
+  }
+});
+
+// Get course rating statistics
+app.get("/api/ratings/course/:id/stats", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const stats = await executeQuery(
+      `SELECT 
+        r.rating_type,
+        COUNT(*) as total_ratings,
+        ROUND(AVG(r.rating), 2) as average_rating,
+        CONCAT(u.first_name, ' ', u.last_name) as lecturer_name
+       FROM ratings r
+       JOIN users u ON r.lecturer_id = u.id
+       WHERE r.course_id = $1
+       GROUP BY r.rating_type, u.first_name, u.last_name
+       ORDER BY r.rating_type, lecturer_name`,
+      [id]
+    );
+
+    sendSuccess(res, stats.rows, "Course rating statistics fetched successfully");
+  } catch (error) {
+    console.error("❌ Course stats error:", error);
+    sendError(res, "Failed to fetch course statistics: " + error.message);
+  }
+});
+
+// ========================
+// SEARCH ROUTES
+// ========================
+app.get("/api/search", authenticateToken, async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q || q.length < 2) {
+      return sendError(res, "Search query must be at least 2 characters long", 400);
+    }
+
+    const searchTerm = `%${q}%`;
+    
+    // Search courses
+    const courses = await executeQuery(
+      `SELECT id, code, name as course_name, 'course' as type
+       FROM courses 
+       WHERE code ILIKE $1 OR name ILIKE $1
+       LIMIT 10`,
+      [searchTerm]
+    );
+
+    // Search lecturers
+    const lecturers = await executeQuery(
+      `SELECT id, CONCAT(first_name, ' ', last_name) as name, 'lecturer' as type
+       FROM users 
+       WHERE role_id = (SELECT id FROM roles WHERE name = 'Lecturer')
+       AND (first_name ILIKE $1 OR last_name ILIKE $1 OR email ILIKE $1)
+       LIMIT 10`,
+      [searchTerm]
+    );
+
+    // Search classes
+    const classes = await executeQuery(
+      `SELECT id, class_name as name, 'class' as type
+       FROM classes 
+       WHERE class_name ILIKE $1
+       LIMIT 10`,
+      [searchTerm]
+    );
+
+    sendSuccess(res, {
+      courses: courses.rows,
+      lecturers: lecturers.rows,
+      classes: classes.rows
+    }, "Search results fetched successfully");
+
+  } catch (error) {
+    console.error("❌ Search error:", error);
+    sendError(res, "Failed to perform search: " + error.message);
+  }
+});
+
+// ========================
+// STUDENT ROUTES
+// ========================
+app.get("/api/students/attendance", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'Student') {
+      return sendError(res, "Access denied. Students only.", 403);
+    }
+
+    const rows = await executeQuery(
+      `SELECT c.name as course_name, c.code as course_code,
+              r.week_of_reporting, r.lecture_date, r.actual_present, r.total_registered,
+              CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
+              ROUND((r.actual_present::float / NULLIF(r.total_registered, 0)) * 100, 2) as attendance_percentage
+       FROM reports r
+       JOIN courses c ON r.course_id = c.id
+       JOIN users u ON r.lecturer_id = u.id
+       WHERE r.class_name LIKE $1
+       ORDER BY r.lecture_date DESC
+       LIMIT 50`,
+      [`%${req.user.role === 'Student' ? req.user.id : ''}%`]
+    );
+
+    sendSuccess(res, rows.rows, "Student attendance fetched successfully");
+  } catch (error) {
+    console.error("❌ Student attendance error:", error);
+    sendError(res, "Failed to fetch student attendance: " + error.message);
+  }
+});
+
+app.get("/api/students/stats", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'Student') {
+      return sendError(res, "Access denied. Students only.", 403);
+    }
+
+    const stats = await executeQuery(
+      `SELECT 
+        COUNT(DISTINCT r.course_id) as total_courses,
+        COUNT(*) as total_classes,
+        ROUND(AVG(r.actual_present::float / NULLIF(r.total_registered, 0)) * 100, 2) as overall_attendance,
+        COUNT(DISTINCT r.lecturer_id) as lecturers_count
+       FROM reports r
+       WHERE r.class_name LIKE $1`,
+      [`%${req.user.id}%`]
+    );
+
+    sendSuccess(res, stats.rows[0] || {
+      total_courses: 0,
+      total_classes: 0,
+      overall_attendance: 0,
+      lecturers_count: 0
+    }, "Student statistics fetched successfully");
+  } catch (error) {
+    console.error("❌ Student stats error:", error);
+    sendError(res, "Failed to fetch student statistics: " + error.message);
+  }
+});
+
+app.get("/api/students/performance", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'Student') {
+      return sendError(res, "Access denied. Students only.", 403);
+    }
+
+    const performance = await executeQuery(
+      `SELECT 
+        c.name as course_name,
+        c.code as course_code,
+        COUNT(*) as classes_attended,
+        ROUND(AVG(r.actual_present::float / NULLIF(r.total_registered, 0)) * 100, 2) as attendance_rate,
+        CONCAT(u.first_name, ' ', u.last_name) as lecturer_name
+       FROM reports r
+       JOIN courses c ON r.course_id = c.id
+       JOIN users u ON r.lecturer_id = u.id
+       WHERE r.class_name LIKE $1
+       GROUP BY c.id, c.name, c.code, u.first_name, u.last_name
+       ORDER BY attendance_rate DESC`,
+      [`%${req.user.id}%`]
+    );
+
+    sendSuccess(res, performance.rows, "Student performance fetched successfully");
+  } catch (error) {
+    console.error("❌ Student performance error:", error);
+    sendError(res, "Failed to fetch student performance: " + error.message);
+  }
+});
+
+// ========================
+// ANALYTICS ROUTES
+// ========================
+app.get("/api/analytics/overview", authenticateToken, async (req, res) => {
+  try {
+    if (!['Admin', 'PRL', 'PL'].includes(req.user.role)) {
+      return sendError(res, "Access denied. Admins, PRL, and PL only.", 403);
+    }
+
+    const overview = await executeQuery(
+      `SELECT 
+        (SELECT COUNT(*) FROM users WHERE role_id = (SELECT id FROM roles WHERE name = 'Student')) as total_students,
+        (SELECT COUNT(*) FROM users WHERE role_id = (SELECT id FROM roles WHERE name = 'Lecturer')) as total_lecturers,
+        (SELECT COUNT(*) FROM courses) as total_courses,
+        (SELECT COUNT(*) FROM reports) as total_reports,
+        (SELECT COALESCE(AVG(actual_present::float / NULLIF(total_registered, 0)) * 100, 0) FROM reports) as avg_attendance,
+        (SELECT COUNT(*) FROM ratings) as total_ratings,
+        (SELECT COALESCE(AVG(rating), 0) FROM ratings) as avg_rating
+      `
+    );
+
+    sendSuccess(res, overview.rows[0], "Analytics overview fetched successfully");
+  } catch (error) {
+    console.error("❌ Analytics overview error:", error);
+    sendError(res, "Failed to fetch analytics overview: " + error.message);
+  }
+});
+
+app.get("/api/analytics/trends", authenticateToken, async (req, res) => {
+  try {
+    if (!['Admin', 'PRL', 'PL'].includes(req.user.role)) {
+      return sendError(res, "Access denied. Admins, PRL, and PL only.", 403);
+    }
+
+    const trends = await executeQuery(
+      `SELECT 
+        DATE(created_at) as date,
+        COUNT(*) as reports_count,
+        COALESCE(AVG(actual_present::float / NULLIF(total_registered, 0)) * 100, 0) as daily_attendance
+       FROM reports
+       WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
+       GROUP BY DATE(created_at)
+       ORDER BY date DESC
+       LIMIT 30`
+    );
+
+    sendSuccess(res, trends.rows, "Analytics trends fetched successfully");
+  } catch (error) {
+    console.error("❌ Analytics trends error:", error);
+    sendError(res, "Failed to fetch analytics trends: " + error.message);
+  }
+});
+
+// ========================
+// USER MANAGEMENT ROUTES
+// ========================
+app.get("/api/users", authenticateToken, async (req, res) => {
+  try {
+    if (!['Admin', 'PRL'].includes(req.user.role)) {
+      return sendError(res, "Access denied. Admins and PRL only.", 403);
+    }
+
+    const rows = await executeQuery(
+      `SELECT u.id, u.first_name, u.last_name, u.email, r.name as role, u.created_at
+       FROM users u
+       JOIN roles r ON u.role_id = r.id
+       ORDER BY u.created_at DESC`
+    );
+
+    sendSuccess(res, rows.rows, "Users fetched successfully");
+  } catch (error) {
+    console.error("❌ Users error:", error);
+    sendError(res, "Failed to fetch users: " + error.message);
+  }
+});
+
+app.put("/api/users/:id/role", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'Admin') {
+      return sendError(res, "Access denied. Admins only.", 403);
+    }
+
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (!role) {
+      return sendError(res, "Role is required", 400);
+    }
+
+    const validRoles = ["Student", "Lecturer", "PRL", "PL", "Admin"];
+    if (!validRoles.includes(role)) {
+      return sendError(res, "Invalid role specified", 400);
+    }
+
+    const roleRes = await executeQuery("SELECT id FROM roles WHERE name = $1", [role]);
+    if (!roleRes.rows.length) {
+      return sendError(res, "Invalid role specified", 400);
+    }
+
+    const result = await executeQuery(
+      "UPDATE users SET role_id = $1 WHERE id = $2 RETURNING id, first_name, last_name, email",
+      [roleRes.rows[0].id, id]
+    );
+
+    if (!result.rows.length) {
+      return sendError(res, "User not found", 404);
+    }
+
+    sendSuccess(res, { 
+      user: result.rows[0],
+      new_role: role 
+    }, "User role updated successfully");
+  } catch (error) {
+    console.error("❌ Update user role error:", error);
+    sendError(res, "Failed to update user role: " + error.message);
   }
 });
 
@@ -902,7 +1426,18 @@ app.get("/api/health", async (req, res) => {
       database: 'connected',
       databaseStatus: isDatabaseConnected,
       timestamp: new Date().toISOString(),
-      cors: 'Enabled for Vercel deployment'
+      cors: 'Enabled for Vercel deployment',
+      modules: {
+        auth: 'active',
+        reports: 'active',
+        ratings: 'active',
+        courses: 'active',
+        classes: 'active',
+        search: 'active',
+        analytics: 'active',
+        students: 'active',
+        users: 'active'
+      }
     }, "API is healthy");
   } catch (error) {
     sendSuccess(res, { 
@@ -924,6 +1459,7 @@ app.get("/", (req, res) => {
         <p>PostgreSQL backend is running</p>
         <p>Database Status: ${isDatabaseConnected ? '✅ Connected' : '❌ Disconnected'}</p>
         <p>CORS: ✅ Enabled for Vercel deployment</p>
+        <p>Modules: ✅ Reports, ✅ Ratings, ✅ Courses, ✅ Classes, ✅ Search, ✅ Analytics</p>
         <ul>
           <li><a href="/api/health">Health Check</a></li>
           <li><a href="/api/test">Test Endpoint</a></li>
@@ -943,6 +1479,7 @@ app.listen(PORT, () => {
   console.log(`📊 Database: Render.com PostgreSQL`);
   console.log(`🔐 JWT Secret: ${process.env.JWT_SECRET ? 'Set' : 'Using fallback'}`);
   console.log(`🌐 CORS Enabled for Vercel deployment`);
+  console.log(`⭐ All Modules: Active`);
   console.log(`🔗 Test endpoint: https://luct-7.onrender.com/api/test`);
   console.log(`📧 Pre-created accounts available (e.g., borotho@luct.ac.ls / password123)`);
 });
