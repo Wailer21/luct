@@ -1822,7 +1822,9 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Database: Render.com PostgreSQL`);
   console.log(`🔐 JWT Secret: ${process.env.JWT_SECRET ? 'Set' : 'Using fallback'}`);
-  
+  console.log(`🌐 CORS Enabled for Vercel deployment`);
+  console.log(`⭐ All Modules: Active`);
+  console.log(`📚 Enhanced Classes API: Ready`);
   console.log(`🔗 Test endpoint: https://luct-7.onrender.com/api/test`);
   console.log(`📧 Pre-created accounts available (e.g., borotho@luct.ac.ls / password123)`);
 });
