@@ -45,6 +45,9 @@ export const API_ENDPOINTS = {
   USERS: `${API_BASE_URL}/api/users`,
   USERS_UPDATE_ROLE: (id) => `${API_BASE_URL}/api/users/${id}/role`,
 
+  // Debug
+  DEBUG_RATINGS_SCHEMA: `${API_BASE_URL}/api/debug/ratings-schema`,
+
   // Health
   HEALTH: `${API_BASE_URL}/api/health`,
   TEST: `${API_BASE_URL}/api/test`,
@@ -346,30 +349,26 @@ export const apiMethods = {
   submitFeedback: (reportId, feedback) => api.post(API_ENDPOINTS.REPORTS_FEEDBACK(reportId), { feedback }),
   getMyReports: () => api.get(API_ENDPOINTS.MY_REPORTS),
   
-  // Ratings - UPDATED with improved submitRating method
+  // Ratings - COMPLETELY UPDATED with enhanced error handling
+  getRatings: () => api.get(API_ENDPOINTS.RATINGS),
   getMyRatings: () => api.get(API_ENDPOINTS.RATINGS_MY),
   getLecturerRatings: () => api.get(API_ENDPOINTS.RATINGS_LECTURER),
   submitRating: (ratingData) => {
-    // Clean up the data - only send what the backend expects
+    // Enhanced data validation and cleanup
     const validatedData = {
       rating: Number(ratingData.rating),
-      comment: ratingData.comment || '',
+      comment: ratingData.comment?.trim() || '',
       rating_type: ratingData.rating_type,
-      lecturer_id: ratingData.lecturer_id,
-      course_id: ratingData.course_id
-      // Remove class_name if it's not needed
+      lecturer_id: parseInt(ratingData.lecturer_id),
+      course_id: parseInt(ratingData.course_id)
     };
 
-    // Remove undefined values
-    Object.keys(validatedData).forEach(key => {
-      if (validatedData[key] === undefined) {
-        delete validatedData[key];
-      }
-    });
-
-    console.log('📊 Submitting rating (cleaned):', validatedData);
+    console.log('📊 Submitting rating (validated):', validatedData);
     return api.post(API_ENDPOINTS.RATINGS, validatedData);
   },
+  
+  // Debug endpoints
+  getRatingsSchema: () => api.get(API_ENDPOINTS.DEBUG_RATINGS_SCHEMA),
   
   // Student Monitoring
   getStudentAttendance: (params = {}) => api.get(API_ENDPOINTS.STUDENT_ATTENDANCE, params),

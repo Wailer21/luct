@@ -42,23 +42,39 @@ export default function Rating() {
         apiMethods.getCourses()
       ]);
 
-      if (lecturersRes.success) setLecturers(lecturersRes.data || []);
-      if (coursesRes.success) setCourses(coursesRes.data || []);
+      if (lecturersRes.success) {
+        setLecturers(lecturersRes.data || []);
+      } else {
+        console.warn('Failed to load lecturers:', lecturersRes.message);
+        setLecturers([]);
+      }
 
-      // Fetch user's ratings
+      if (coursesRes.success) {
+        setCourses(coursesRes.data || []);
+      } else {
+        console.warn('Failed to load courses:', coursesRes.message);
+        setCourses([]);
+      }
+
+      // Fetch user's ratings - with enhanced error handling
       try {
         const ratingsRes = await apiMethods.getMyRatings();
         if (ratingsRes.success) {
           setMyRatings(ratingsRes.data || []);
+        } else {
+          console.warn('Could not load ratings:', ratingsRes.message);
+          setMyRatings([]);
+          // Don't show error to user for ratings, as it's not critical
         }
       } catch (ratingsError) {
         console.warn('Could not load ratings:', ratingsError);
         setMyRatings([]);
+        // Don't set error state for ratings failure
       }
 
     } catch (error) {
       console.error('Error fetching data:', error);
-      setError('Failed to load data');
+      setError('Failed to load data. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -67,7 +83,7 @@ export default function Rating() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Validation
+    // Enhanced validation
     if (!selectedLecturer) {
       setError('Please select a lecturer');
       return;
@@ -88,6 +104,12 @@ export default function Rating() {
       return;
     }
 
+    // Check if user has already rated this specific combination
+    if (hasRatedSpecific(selectedLecturer, selectedCourse, ratingType)) {
+      setError(`You have already submitted a ${ratingTypes.find(t => t.value === ratingType)?.label.toLowerCase()} rating for ${getLecturerName(selectedLecturer)} and ${getCourseName(selectedCourse)}`);
+      return;
+    }
+
     setSubmitting(true);
     setError('');
     setSuccess('');
@@ -100,12 +122,11 @@ export default function Rating() {
         rating_type: ratingType,
         lecturer_id: parseInt(selectedLecturer),
         course_id: parseInt(selectedCourse)
-        // user_id will be set automatically by the backend from the token
       };
 
-      console.log('Submitting rating (frontend):', ratingData);
+      console.log('📊 Submitting rating (frontend):', ratingData);
 
-      // Validate all required fields are present and valid
+      // Enhanced validation
       const requiredFields = ['rating', 'rating_type', 'lecturer_id', 'course_id'];
       const missingFields = requiredFields.filter(field => !ratingData[field] && ratingData[field] !== 0);
       
@@ -147,7 +168,18 @@ export default function Rating() {
         // Refresh ratings
         fetchData();
       } else {
-        setError(response.message || 'Failed to submit rating');
+        // Enhanced error messages
+        let errorMessage = response.message || 'Failed to submit rating';
+        
+        if (response.status === 409) {
+          errorMessage = `You have already submitted a ${ratingType.replace('_', ' ')} rating for this lecturer and course.`;
+        } else if (response.status === 403) {
+          errorMessage = 'Only students can submit ratings.';
+        } else if (response.status === 404) {
+          errorMessage = 'Lecturer or course not found. Please refresh the page and try again.';
+        }
+        
+        setError(errorMessage);
       }
     } catch (error) {
       console.error('Error submitting rating:', error);
@@ -195,6 +227,22 @@ export default function Rating() {
     const course = courses.find(c => c.id == courseId);
     return course ? `${course.code} - ${course.course_name || course.name}` : 'Unknown Course';
   };
+
+  // Render loading state
+  if (loading) {
+    return (
+      <div className="container-fluid py-4">
+        <div className="row">
+          <div className="col-12">
+            <div className="text-center py-5">
+              <div className="spinner-border text-primary" style={{width: '3rem', height: '3rem'}}></div>
+              <p className="mt-3">Loading rating system...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container-fluid py-4">
