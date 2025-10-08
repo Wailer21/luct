@@ -781,7 +781,8 @@ app.get("/api/ratings/my-ratings", authenticateToken, async (req, res) => {
     }
 
     const rows = await executeQuery(
-      `SELECT r.*, 
+      `SELECT 
+              r.id, r.rating, r.comment, r.rating_type, r.created_at, r.student_id, r.lecturer_id, r.course_id,
               CONCAT(u.first_name, ' ', u.last_name) as lecturer_name,
               c.name as course_name,
               c.code as course_code
