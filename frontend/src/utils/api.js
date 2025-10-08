@@ -15,19 +15,16 @@ export const API_ENDPOINTS = {
   CLASSES: `${API_BASE_URL}/api/classes`,
   MY_CLASSES: `${API_BASE_URL}/api/my-classes`,
   LECTURERS: `${API_BASE_URL}/api/lecturers`,
-  PROGRAM_CLASSES: (programId) => `${API_BASE_URL}/api/programs/${programId}/classes`,
 
   // Reports
   REPORTS: `${API_BASE_URL}/api/reports`,
   REPORTS_STATS: `${API_BASE_URL}/api/reports/stats`,
   REPORTS_BY_ID: (id) => `${API_BASE_URL}/api/reports/${id}`,
   REPORTS_FEEDBACK: (id) => `${API_BASE_URL}/api/reports/${id}/feedback`,
-  MY_REPORTS: `${API_BASE_URL}/api/reports/my-reports`,
 
   // Ratings
   RATINGS: `${API_BASE_URL}/api/ratings`,
   RATINGS_MY: `${API_BASE_URL}/api/ratings/my-ratings`,
-  RATINGS_LECTURER: `${API_BASE_URL}/api/ratings/lecturer`,
 
   // Search
   SEARCH: `${API_BASE_URL}/api/search`,
@@ -44,9 +41,6 @@ export const API_ENDPOINTS = {
   // User Management
   USERS: `${API_BASE_URL}/api/users`,
   USERS_UPDATE_ROLE: (id) => `${API_BASE_URL}/api/users/${id}/role`,
-
-  // Debug
-  DEBUG_RATINGS_SCHEMA: `${API_BASE_URL}/api/debug/ratings-schema`,
 
   // Health
   HEALTH: `${API_BASE_URL}/api/health`,
@@ -332,43 +326,36 @@ export const apiMethods = {
   getMyClasses: () => api.get(API_ENDPOINTS.MY_CLASSES),
   getLecturers: () => api.get(API_ENDPOINTS.LECTURERS),
   
-  // Class Management
-  getProgramClasses: (programId) => api.get(API_ENDPOINTS.PROGRAM_CLASSES(programId)),
-  createClass: (classData) => api.post(API_ENDPOINTS.CLASSES, classData),
-  updateClass: (classId, classData) => api.put(`${API_ENDPOINTS.CLASSES}/${classId}`, classData),
-  deleteClass: (classId) => api.delete(`${API_ENDPOINTS.CLASSES}/${classId}`),
-  
   // Reports
   getReports: (params = {}) => api.get(API_ENDPOINTS.REPORTS, params),
   getReportStats: () => api.get(API_ENDPOINTS.REPORTS_STATS),
   getReportById: (id) => api.get(API_ENDPOINTS.REPORTS_BY_ID(id)),
   createReport: (data) => api.post(API_ENDPOINTS.REPORTS, data),
   updateReport: (id, data) => api.put(API_ENDPOINTS.REPORTS_BY_ID(id), data),
-
-  // Feedback endpoints
   submitFeedback: (reportId, feedback) => api.post(API_ENDPOINTS.REPORTS_FEEDBACK(reportId), { feedback }),
-  getMyReports: () => api.get(API_ENDPOINTS.MY_REPORTS),
   
-  // Ratings - COMPLETELY UPDATED with enhanced error handling
+  // Ratings - UPDATED FOR ACTUAL SCHEMA
   getRatings: () => api.get(API_ENDPOINTS.RATINGS),
   getMyRatings: () => api.get(API_ENDPOINTS.RATINGS_MY),
-  getLecturerRatings: () => api.get(API_ENDPOINTS.RATINGS_LECTURER),
   submitRating: (ratingData) => {
-    // Enhanced data validation and cleanup
+    // Updated for actual schema - remove rating_type, handle either lecturer OR course
     const validatedData = {
       rating: Number(ratingData.rating),
       comment: ratingData.comment?.trim() || '',
-      rating_type: ratingData.rating_type,
-      lecturer_id: parseInt(ratingData.lecturer_id),
-      course_id: parseInt(ratingData.course_id)
+      lecturer_id: ratingData.lecturer_id ? parseInt(ratingData.lecturer_id) : null,
+      course_id: ratingData.course_id ? parseInt(ratingData.course_id) : null
     };
 
-    console.log('📊 Submitting rating (validated):', validatedData);
+    // Remove null values
+    Object.keys(validatedData).forEach(key => {
+      if (validatedData[key] === null || validatedData[key] === undefined) {
+        delete validatedData[key];
+      }
+    });
+
+    console.log('📊 Submitting rating (validated for actual schema):', validatedData);
     return api.post(API_ENDPOINTS.RATINGS, validatedData);
   },
-  
-  // Debug endpoints
-  getRatingsSchema: () => api.get(API_ENDPOINTS.DEBUG_RATINGS_SCHEMA),
   
   // Student Monitoring
   getStudentAttendance: (params = {}) => api.get(API_ENDPOINTS.STUDENT_ATTENDANCE, params),

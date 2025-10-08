@@ -238,36 +238,40 @@ function validateReport(req, res, next) {
 }
 
 // ========================
-// RATINGS VALIDATION - ENHANCED
+// RATINGS VALIDATION - UPDATED FOR ACTUAL SCHEMA
 // ========================
 function validateRating(req, res, next) {
-  const { lecturer_id, course_id, rating, comment, rating_type } = req.body;
+  const { lecturer_id, course_id, rating, comment } = req.body;
   
-  console.log('📊 Validating rating submission:', { lecturer_id, course_id, rating, rating_type });
+  console.log('📊 Validating rating submission:', { lecturer_id, course_id, rating });
   
-  if (!lecturer_id || !course_id || !rating || !rating_type) {
-    return sendError(res, "Lecturer, course, rating, and rating type are required", 400);
+  if (!rating) {
+    return sendError(res, "Rating is required", 400);
+  }
+  
+  // Your schema requires either lecturer_id OR course_id, not both
+  if (!lecturer_id && !course_id) {
+    return sendError(res, "Either lecturer or course must be selected", 400);
+  }
+  
+  if (lecturer_id && course_id) {
+    return sendError(res, "Please rate either a lecturer OR a course, not both at the same time", 400);
   }
   
   if (isNaN(rating) || rating < 1 || rating > 5) {
     return sendError(res, "Rating must be a number between 1 and 5", 400);
   }
   
-  const validRatingTypes = ["teaching", "subject_knowledge", "communication", "punctuality", "overall"];
-  if (!validRatingTypes.includes(rating_type)) {
-    return sendError(res, "Invalid rating type", 400);
-  }
-  
   if (comment && comment.length > 500) {
     return sendError(res, "Comment must be less than 500 characters", 400);
   }
   
-  // Validate IDs are numbers
-  if (isNaN(lecturer_id) || lecturer_id <= 0) {
+  // Validate IDs are numbers if provided
+  if (lecturer_id && (isNaN(lecturer_id) || lecturer_id <= 0)) {
     return sendError(res, "Invalid lecturer ID", 400);
   }
   
-  if (isNaN(course_id) || course_id <= 0) {
+  if (course_id && (isNaN(course_id) || course_id <= 0)) {
     return sendError(res, "Invalid course ID", 400);
   }
   
@@ -760,22 +764,20 @@ app.post("/api/reports/:id/feedback", authenticateToken, async (req, res) => {
   }
 });
 
-// ========================
-// RATINGS ROUTES - COMPLETELY REWRITTEN
-// ========================
+// ===== RATINGS ROUTES - UPDATED FOR ACTUAL SCHEMA =====
 
-// GET all ratings (for admins)
+// GET all ratings (for admins) - UPDATED
 app.get("/api/ratings", authenticateToken, async (req, res) => {
     try {
       console.log('📊 Fetching all ratings');
       
       const result = await executeQuery(
-        `SELECT r.id, r.rating, r.comment, r.rating_type, r.created_at,
-                r.lecturer_id, r.course_id, r.student_id,
+        `SELECT r.id, r.rating, r.comment, r.created_at,
+                r.user_id, r.lecturer_id, r.course_id,
+                (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = r.user_id) as student_name,
                 (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = r.lecturer_id) as lecturer_name,
                 (SELECT name FROM courses WHERE id = r.course_id) as course_name,
-                (SELECT code FROM courses WHERE id = r.course_id) as course_code,
-                (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = r.student_id) as student_name
+                (SELECT code FROM courses WHERE id = r.course_id) as course_code
          FROM ratings r
          ORDER BY r.created_at DESC LIMIT 100`
       );
@@ -788,7 +790,7 @@ app.get("/api/ratings", authenticateToken, async (req, res) => {
     }
 });
 
-// GET user's own ratings
+// GET user's own ratings - UPDATED
 app.get("/api/ratings/my-ratings", authenticateToken, async (req, res) => {
     try {
       console.log('📊 Fetching ratings for user:', req.user.id, 'Role:', req.user.role);
@@ -797,15 +799,14 @@ app.get("/api/ratings/my-ratings", authenticateToken, async (req, res) => {
         return sendError(res, "Access denied. Students only.", 403);
       }
       
-      // SIMPLIFIED QUERY - remove complex joins that might fail
       const result = await executeQuery(
-        `SELECT r.id, r.rating, r.comment, r.rating_type, r.created_at, 
+        `SELECT r.id, r.rating, r.comment, r.created_at, 
                 r.lecturer_id, r.course_id,
                 (SELECT CONCAT(first_name, ' ', last_name) FROM users WHERE id = r.lecturer_id) as lecturer_name,
                 (SELECT name FROM courses WHERE id = r.course_id) as course_name,
                 (SELECT code FROM courses WHERE id = r.course_id) as course_code
          FROM ratings r
-         WHERE r.student_id = $1
+         WHERE r.user_id = $1
          ORDER BY r.created_at DESC`,
         [req.user.id]
       );
@@ -818,20 +819,19 @@ app.get("/api/ratings/my-ratings", authenticateToken, async (req, res) => {
     }
 });
 
-// POST new rating - COMPLETELY REWRITTEN
+// POST new rating - COMPLETELY REWRITTEN FOR ACTUAL SCHEMA
 app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => {
-  const { lecturer_id, course_id, rating, comment, rating_type } = req.body;
+  const { lecturer_id, course_id, rating, comment } = req.body;
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
 
     console.log('📊 Rating submission attempt:', {
-      student_id: req.user.id,
+      user_id: req.user.id,
       lecturer_id,
       course_id,
       rating,
-      rating_type,
       comment_length: comment?.length || 0
     });
 
@@ -841,55 +841,70 @@ app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => 
       return sendError(res, "Only students can submit ratings", 403);
     }
 
-    // Check if lecturer exists and is actually a lecturer
-    const lecturerCheck = await client.query(
-      `SELECT u.id FROM users u 
-       JOIN roles r ON u.role_id = r.id 
-       WHERE u.id = $1 AND r.name = 'Lecturer'`,
-      [lecturer_id]
-    );
+    // Check for existing rating based on your schema constraints
+    if (lecturer_id) {
+      // Check if user already rated this lecturer
+      const existingLecturerRating = await client.query(
+        `SELECT id FROM ratings WHERE user_id = $1 AND lecturer_id = $2`,
+        [req.user.id, lecturer_id]
+      );
 
-    if (lecturerCheck.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return sendError(res, "Lecturer not found or invalid", 404);
+      if (existingLecturerRating.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return sendError(res, "You have already rated this lecturer.", 409);
+      }
+
+      // Verify lecturer exists and is actually a lecturer
+      const lecturerCheck = await client.query(
+        `SELECT u.id FROM users u 
+         JOIN roles r ON u.role_id = r.id 
+         WHERE u.id = $1 AND r.name = 'Lecturer'`,
+        [lecturer_id]
+      );
+
+      if (lecturerCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return sendError(res, "Lecturer not found or invalid", 404);
+      }
     }
 
-    // Check if course exists
-    const courseCheck = await client.query(
-      "SELECT id, name FROM courses WHERE id = $1",
-      [course_id]
-    );
+    if (course_id) {
+      // Check if user already rated this course
+      const existingCourseRating = await client.query(
+        `SELECT id FROM ratings WHERE user_id = $1 AND course_id = $2`,
+        [req.user.id, course_id]
+      );
 
-    if (courseCheck.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return sendError(res, "Course not found", 404);
+      if (existingCourseRating.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return sendError(res, "You have already rated this course.", 409);
+      }
+
+      // Verify course exists
+      const courseCheck = await client.query(
+        "SELECT id, name FROM courses WHERE id = $1",
+        [course_id]
+      );
+
+      if (courseCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return sendError(res, "Course not found", 404);
+      }
     }
 
-    // Check for existing rating of the same type
-    const existingRating = await client.query(
-      `SELECT id, rating_type FROM ratings 
-       WHERE student_id = $1 AND lecturer_id = $2 AND course_id = $3 AND rating_type = $4`,
-      [req.user.id, lecturer_id, course_id, rating_type]
-    );
-
-    if (existingRating.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return sendError(res, `You have already submitted a ${rating_type.replace('_', ' ')} rating for this lecturer and course.`, 409);
-    }
-
-    // Insert the rating
+    // Insert the rating - using your actual schema
     console.log('📝 Inserting new rating...');
     const insertRes = await client.query(
-      `INSERT INTO ratings (student_id, lecturer_id, course_id, rating, comment, rating_type, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id`,
-      [req.user.id, lecturer_id, course_id, Number(rating), comment || null, rating_type]
+      `INSERT INTO ratings (user_id, lecturer_id, course_id, rating, comment, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING id`,
+      [req.user.id, lecturer_id || null, course_id || null, Number(rating), comment || null]
     );
 
     await client.query('COMMIT');
     
     console.log('✅ Rating submitted successfully:', {
       rating_id: insertRes.rows[0].id,
-      student_id: req.user.id,
+      user_id: req.user.id,
       lecturer_id,
       course_id
     });
@@ -909,11 +924,17 @@ app.post("/api/ratings", authenticateToken, validateRating, async (req, res) => 
         return sendError(res, "Lecturer not found", 404);
       } else if (error.message.includes('course_id')) {
         return sendError(res, "Course not found", 404);
-      } else if (error.message.includes('student_id')) {
-        return sendError(res, "Student not found", 404);
+      } else if (error.message.includes('user_id')) {
+        return sendError(res, "User not found", 404);
       }
     } else if (error.code === '23505') { // Unique violation
-      return sendError(res, "You have already submitted this rating", 409);
+      if (error.message.includes('ratings_user_id_lecturer_id_key')) {
+        return sendError(res, "You have already rated this lecturer", 409);
+      } else if (error.message.includes('ratings_user_id_course_id_key')) {
+        return sendError(res, "You have already rated this course", 409);
+      }
+    } else if (error.code === '23514') { // Check constraint violation
+      return sendError(res, "Invalid rating: must rate either a lecturer OR a course", 400);
     }
     
     sendError(res, "Failed to submit rating: " + error.message);
@@ -1380,25 +1401,6 @@ app.get("/api/reports/:id/feedback", authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("❌ Get feedback error:", error);
     sendError(res, "Failed to fetch feedback: " + error.message);
-  }
-});
-
-// ========================
-// DEBUG ENDPOINTS
-// ========================
-app.get("/api/debug/ratings-schema", authenticateToken, async (req, res) => {
-  try {
-    const result = await executeQuery(`
-      SELECT column_name, data_type, is_nullable
-      FROM information_schema.columns 
-      WHERE table_name = 'ratings' 
-      ORDER BY ordinal_position
-    `);
-    
-    sendSuccess(res, result.rows, "Ratings table schema");
-  } catch (error) {
-    console.error("❌ Schema check error:", error);
-    sendError(res, "Failed to check schema: " + error.message);
   }
 });
 
